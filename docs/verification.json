@@ -1,0 +1,287 @@
+{
+  "date": "2026-10-11",
+  "host": "Windows x64",
+  "tools": {
+    "bazel": "9.2.0",
+    "llvm": "22.1.0",
+    "qemu": "11.1.0"
+  },
+  "nt_source_commit": "1b390dddff9fe017e9c11a7845c67a887c3483dc",
+  "fat_regression_tests": {
+    "run": 2,
+    "passed": 2
+  },
+  "boots": {
+    "minimal": {
+      "variant": "minimal",
+      "boot_device": "ide",
+      "image_sha256": "f020e58ada6d8d3a923d20c3a8a67cf668a1fbf44a0ef3c7fcf3e7bc3169c1f6",
+      "passed": true,
+      "suites": [
+        9,
+        9,
+        0
+      ],
+      "tests": [
+        54,
+        54,
+        0
+      ],
+      "exit_code": 0,
+      "kernel_tests_passed": true,
+      "ps_aux_exit_code": 0
+    },
+    "xfce": {
+      "variant": "xfce",
+      "boot_device": "ide",
+      "image_sha256": "e6c423f9c84618deb079b4aa45ac6f4f41697537390a9a22407e3b6edc279885",
+      "passed": true,
+      "suites": [
+        9,
+        9,
+        0
+      ],
+      "tests": [
+        54,
+        54,
+        0
+      ],
+      "exit_code": 0,
+      "kernel_tests_passed": true,
+      "ps_aux_exit_code": 0,
+      "x11_transport_ready": true,
+      "visible_xfce_windows": {
+        "top_panel": 1,
+        "bottom_panel": 1,
+        "terminal": 1,
+        "desktop": 1
+      },
+      "xfce_desktop_ready": true
+    },
+    "minimal-usb": {
+      "variant": "minimal",
+      "boot_device": "usb",
+      "image_sha256": "f020e58ada6d8d3a923d20c3a8a67cf668a1fbf44a0ef3c7fcf3e7bc3169c1f6",
+      "passed": true,
+      "suites": [
+        9,
+        9,
+        0
+      ],
+      "tests": [
+        54,
+        54,
+        0
+      ],
+      "exit_code": 0,
+      "kernel_tests_passed": true,
+      "ps_aux_exit_code": 0
+    },
+    "xfce-usb": {
+      "variant": "xfce",
+      "boot_device": "usb",
+      "image_sha256": "e6c423f9c84618deb079b4aa45ac6f4f41697537390a9a22407e3b6edc279885",
+      "passed": true,
+      "suites": [
+        9,
+        9,
+        0
+      ],
+      "tests": [
+        54,
+        54,
+        0
+      ],
+      "exit_code": 0,
+      "kernel_tests_passed": true,
+      "ps_aux_exit_code": 0,
+      "x11_transport_ready": true,
+      "visible_xfce_windows": {
+        "top_panel": 1,
+        "bottom_panel": 1,
+        "terminal": 1,
+        "desktop": 1
+      },
+      "xfce_desktop_ready": true
+    }
+  },
+  "manual_xfce_keyboard_check": {
+    "command": "expr 137 - 29",
+    "observed_output": "108"
+  },
+  "notes": [
+    "NT Executive seed objects and published support libraries are external binary inputs; see THIRD_PARTY.md.",
+    "Mapped-window readiness is supplemented by the actual QEMU screenshots in docs/screenshots.",
+    "Unknown ps fields are shown as question marks; START uses UTC and STAT uses NT ready/running/waiting states."
+  ],
+  "clean_rebuild": {
+    "date": "2026-10-11",
+    "clean_command": "bazel clean --expunge",
+    "targets": [
+      "//:kernel_bundle",
+      "//:minimal_image",
+      "//:xfce_image"
+    ],
+    "build": {
+      "succeeded": true,
+      "total_actions": 1591,
+      "internal_actions": 832,
+      "local_actions": 759,
+      "kernel_c_compilations": 626,
+      "kernel_assembly_compilations": 64
+    },
+    "boots": {
+      "minimal": {
+        "variant": "minimal",
+        "boot_device": "ide",
+        "image_sha256": "2859c89159b73b29bb6b9b4d63ba3499e53f3129672f5e72155e6312db286e62",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0
+      },
+      "xfce": {
+        "variant": "xfce",
+        "boot_device": "ide",
+        "image_sha256": "951be44cb700b4b56fbb43f156526aea97c723999d88ebdc4fe37b42d758152e",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1
+        },
+        "xfce_desktop_ready": true
+      }
+    },
+    "visible_qemu_window_confirmed": true,
+    "desktop_screenshot": "docs/screenshots/xfce-desktop.png"
+  },
+  "xfce_terminal_captures": {
+    "date": "2026-10-11",
+    "image_sha256": "951be44cb700b4b56fbb43f156526aea97c723999d88ebdc4fe37b42d758152e",
+    "capture_method": "Unedited QEMU screendump PNG of the XFCE terminal",
+    "observed_results": {
+      "nttest_suites": [
+        9,
+        9,
+        0
+      ],
+      "nttest_tests": [
+        54,
+        54,
+        0
+      ],
+      "nttest_exit_code": 0,
+      "registry_tests": [
+        5,
+        5,
+        0
+      ],
+      "security_tests": [
+        6,
+        6,
+        0
+      ],
+      "loaded_embedded_modules": 4,
+      "loaded_nt_modules": 22,
+      "uname_fields": "Static Linux syscall compatibility strings"
+    },
+    "captures": [
+      {
+        "commands": [
+          "lsmod"
+        ],
+        "screenshot": "docs/screenshots/xfce-lsmod.png",
+        "sha256": "522e2cab0459e0cf0c7c34dfc63466138315d92ae3af2da5bcb454fbe844bd4f"
+      },
+      {
+        "commands": [
+          "uname -a"
+        ],
+        "screenshot": "docs/screenshots/xfce-uname.png",
+        "sha256": "8ab3f944384debb433458a0f0cd97a1d285714b9836926d5187f809ce1e5293a"
+      },
+      {
+        "commands": [
+          "nttest > /tmp/nttest-capture.txt",
+          "echo \"nttest exit=$?\"",
+          "tail -n 19 /tmp/nttest-capture.txt"
+        ],
+        "screenshot": "docs/screenshots/xfce-nttest.png",
+        "sha256": "3dd34debb50e00fb5d7e6df3de86bce1621aa47d4393ea9aefe4787dfda22206"
+      },
+      {
+        "commands": [
+          "cd /WINDOWS/system32",
+          "pwd",
+          "ls"
+        ],
+        "screenshot": "docs/screenshots/xfce-system32.png",
+        "sha256": "a57abcaa02eefe979be92d2518fb81e99868c5d8ad0d410de43d0e1a1a3ce4e5"
+      },
+      {
+        "commands": [
+          "cd /WINDOWS/system32/drivers",
+          "pwd",
+          "ls"
+        ],
+        "screenshot": "docs/screenshots/xfce-drivers.png",
+        "sha256": "b507ca4511e480c64119a4689d0d498558fa23f81e7ab7f4f56213e79d45d72c"
+      },
+      {
+        "commands": [
+          "lsmod -a"
+        ],
+        "screenshot": "docs/screenshots/xfce-nt-modules.png",
+        "sha256": "70f613df2db8fa438f8bf78dc5b33ace833a91930bcef3d27b2fd77a7e028a17"
+      },
+      {
+        "commands": [
+          "nttest cm"
+        ],
+        "screenshot": "docs/screenshots/xfce-registry.png",
+        "sha256": "c340c200daad08b6a8b998ddd17c88dc9dd5d27ffb25e8d2900208ac5eb5d3a1"
+      },
+      {
+        "commands": [
+          "nttest se"
+        ],
+        "screenshot": "docs/screenshots/xfce-security.png",
+        "sha256": "4861f6752d00b52348317c696bb2ee08944d4dac4145d3420dbe8ccf7adab157"
+      },
+      {
+        "commands": [
+          "ps aux > /tmp/ps-capture.txt",
+          "head -n 8 /tmp/ps-capture.txt"
+        ],
+        "screenshot": "docs/screenshots/xfce-nt-processes.png",
+        "sha256": "ba64fe2df6d94070df4c06c0fa64ce697924e6ce184e674dad8c9d412fa6f641"
+      }
+    ]
+  }
+}

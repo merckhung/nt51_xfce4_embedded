@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Thunar File Manager
+Comment=File Manager
+Exec=/usr/bin/thunar /usr/share/themes
+Icon=system-file-manager
+Terminal=false
+Categories=System;Utility;X-XFCE;

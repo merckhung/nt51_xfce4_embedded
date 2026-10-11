@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=NT Kernel Tests
+Comment=Windows XP Kernel Suite
+Exec=/bin/nttest
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Utility;X-XFCE;

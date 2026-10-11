@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0-only
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "sources", srcs = glob(["*.c", "*.h"]))

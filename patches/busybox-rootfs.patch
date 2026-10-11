@@ -1,0 +1,336 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This license covers project changes; upstream context keeps its original license.
+diff --git a/libbb/xfunc_die.c b/libbb/xfunc_die.c
+--- a/libbb/xfunc_die.c
++++ b/libbb/xfunc_die.c
+@@ -13,6 +13,14 @@
+ 
+ void (*die_func)(void);
+ 
++__attribute__((visibility("default"))) void *bb_get_die_func(void) {
++    return (void *)die_func;
++}
++
++__attribute__((visibility("default"))) void bb_set_die_func(void *f) {
++    die_func = (void (*)(void))f;
++}
++
+ void FAST_FUNC xfunc_die(void)
+ {
+ 	if (die_func)
+diff --git a/libbb/const_hack.c b/libbb/const_hack.c
+--- a/libbb/const_hack.c
++++ b/libbb/const_hack.c
+@@ -8,6 +8,7 @@
+  */
+ #include "libbb.h"
+ 
++#undef XZALLOC_CONST_PTR
+ #if defined(__clang_major__) && __clang_major__ >= 9
+ void FAST_FUNC XZALLOC_CONST_PTR(const void *pptr, size_t size)
+ {
+diff --git a/libbb/ptr_to_globals.c b/libbb/ptr_to_globals.c
+--- a/libbb/ptr_to_globals.c
++++ b/libbb/ptr_to_globals.c
+@@ -13,6 +13,14 @@
+ /* We cheat here. It is declared as const ptr in libbb.h,
+  * but here we make it live in R/W memory */
+ struct globals *ptr_to_globals;
++
++__attribute__((visibility("default"))) void *bb_get_ptr_to_globals(void) {
++    return (void *)ptr_to_globals;
++}
++
++__attribute__((visibility("default"))) void bb_set_ptr_to_globals(void *p) {
++    ptr_to_globals = (struct globals *)p;
++}
+ 
+ #ifdef errno
+ int *bb_errno;
+diff --git a/libbb/appletlib.c b/libbb/appletlib.c
+--- a/libbb/appletlib.c
++++ b/libbb/appletlib.c
+@@ -32,6 +32,8 @@
+ 
+ #include "busybox.h"
+ 
++extern void shim_debug_print(const char *msg);
++
+ #if !(defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) \
+     || defined(__APPLE__) \
+     )
+@@ -284,6 +286,14 @@
+  */
+ 
+ const char *applet_name;
++
++__attribute__((visibility("default"))) const char *bb_get_applet_name(void) {
++    return applet_name;
++}
++
++__attribute__((visibility("default"))) void bb_set_applet_name(const char *name) {
++    applet_name = name;
++}
+ #if !BB_MMU
+ bool re_execed;
+ #endif
+@@ -768,6 +778,7 @@
+ #  endif
+ int busybox_main(int argc UNUSED_PARAM, char **argv)
+ {
++	shim_debug_print("[busybox] entered busybox_main!\n");
+ 	if (!argv[1]) {
+ 		/* Called without arguments */
+ 		const char *a;
+@@ -976,6 +987,9 @@
+ # if ENABLE_BUSYBOX || NUM_APPLETS > 0
+ static NORETURN void run_applet_and_exit(const char *name, char **argv)
+ {
++	shim_debug_print("[busybox] in run_applet_and_exit: ");
++	if (name) shim_debug_print(name);
++	shim_debug_print("\n");
+ #  if ENABLE_BUSYBOX
+ 	if (is_prefixed_with(name, "busybox"))
+ 		exit(busybox_main(/*unused:*/ 0, argv));
+@@ -1032,6 +1046,7 @@
+ int main(int argc UNUSED_PARAM, char **argv)
+ #endif
+ {
++	shim_debug_print("[busybox] entered main()\n");
+ #if 0
+ 	/* TODO: find a use for a block of memory between end of .bss
+ 	 * and end of page. For example, I'm getting "_end:0x812e698 2408 bytes"
+@@ -1099,7 +1114,9 @@
+ 
+ #else
+ 
++	shim_debug_print("[busybox] entered main!\n");
+ 	lbb_prepare("busybox" IF_FEATURE_INDIVIDUAL(, argv));
++	shim_debug_print("[busybox] lbb_prepare finished!\n");
+ # if !ENABLE_BUSYBOX
+ 	if (argv[1] && is_prefixed_with(bb_basename(argv[0]), "busybox"))
+ 		argv++;
+diff --git a/libbb/get_last_path_component.c b/libbb/get_last_path_component.c
+--- a/libbb/get_last_path_component.c
++++ b/libbb/get_last_path_component.c
+@@ -10,7 +10,9 @@
+ 
+ const char* FAST_FUNC bb_basename(const char *name)
+ {
+-	const char *cp = strrchr(name, '/');
++	const char *cp1 = strrchr(name, '/');
++	const char *cp2 = strrchr(name, '\\');
++	const char *cp = cp1 > cp2 ? cp1 : cp2;
+ 	if (cp)
+ 		return cp + 1;
+ 	return name;
+@@ -24,7 +26,9 @@
+  */
+ char* FAST_FUNC bb_get_last_path_component_nostrip(const char *path)
+ {
+-	char *slash = strrchr(path, '/');
++	char *slash1 = strrchr(path, '/');
++	char *slash2 = strrchr(path, '\\');
++	char *slash = slash1 > slash2 ? slash1 : slash2;
+ 
+ 	if (!slash || (slash == path && !slash[1]))
+ 		return (char*)path;
+@@ -41,9 +45,11 @@
+ char* FAST_FUNC bb_get_last_path_component_strip(char *path)
+ {
+ 	char *slash = last_char_is(path, '/');
++	if (!slash)
++		slash = last_char_is(path, '\\');
+ 
+ 	if (slash)
+-		while (*slash == '/' && slash != path)
++		while ((*slash == '/' || *slash == '\\') && slash != path)
+ 			*slash-- = '\0';
+ 
+ 	return bb_get_last_path_component_nostrip(path);
+diff --git a/libbb/lineedit.c b/libbb/lineedit.c
+--- a/libbb/lineedit.c
++++ b/libbb/lineedit.c
+@@ -2063,8 +2063,10 @@
+ 					if (c == 'w')
+ 						break;
+ 					cp = strrchr(pbuf, '/');
+-					if (cp)
+-						pbuf = (char*)cp + 1;
++					if (cp) {
++						if (cp[1] != '\0')
++							pbuf = (char*)cp + 1;
++					}
+ 					break;
+ // bb_process_escape_sequence does this now:
+ //				case 'e': case 'E':     /* \e \E = \033 */
+diff --git a/shell/hush.c b/shell/hush.c
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -498,7 +498,7 @@
+ 
+ struct variable;
+ 
+-static const char hush_version_str[] ALIGN1 = "HUSH_VERSION="BB_VER;
++static const char hush_version_str[] ALIGN1 = "HUSH_VERSION=" BB_VER;
+ 
+ /* This supports saving pointers malloced in vfork child,
+  * to be freed in the parent.
+@@ -1040,8 +1040,8 @@
+  * (too many defines). Also, I actually prefer to see when a variable
+  * is global, thus "G." prefix is a useful hint */
+ #define INIT_G() do { \
+-	SET_PTR_TO_GLOBALS(xzalloc(sizeof(G))); \
+-	/* memset(&G.sa, 0, sizeof(G.sa)); */  \
++	ptr_to_globals = xzalloc(sizeof(G)); \
++	barrier(); \
+ 	sigfillset(&G.sa.sa_mask); \
+ 	G.sa.sa_flags = SA_RESTART; \
+ } while (0)
+@@ -10223,9 +10223,12 @@
+ 	return EXIT_SUCCESS;
+ }
+ 
++extern void shim_debug_print(const char *msg);
++
+ int hush_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int hush_main(int argc, char **argv)
+ {
++	shim_debug_print("[hush] entered hush_main!\n");
+ 	pid_t cached_getpid;
+ 	enum {
+ 		OPT_login = (1 << 0),
+@@ -10238,7 +10241,9 @@
+ 	struct variable *cur_var;
+ 	struct variable *shell_ver;
+ 
++	shim_debug_print("[hush] calling INIT_G...\n");
+ 	INIT_G();
++	shim_debug_print("[hush] INIT_G returned!\n");
+ 	if (EXIT_SUCCESS != 0) /* if EXIT_SUCCESS == 0, it is already done */
+ 		G.last_exitcode = EXIT_SUCCESS;
+ #if ENABLE_HUSH_TRAP
+diff --git a/applets/applet_tables.c b/applets/applet_tables.c
+--- a/applets/applet_tables.c
++++ b/applets/applet_tables.c
+@@ -17,6 +17,15 @@
+ #include <unistd.h>
+ #include <ctype.h>
+ 
++#ifdef _WIN32
++#include <io.h>
++static inline int safe_rename(const char *src, const char *dst) {
++	remove(dst);
++	return rename(src, dst);
++}
++#define rename safe_rename
++#endif
++
+ #undef ARRAY_SIZE
+ #define ARRAY_SIZE(x) ((unsigned)(sizeof(x) / sizeof((x)[0])))
+ 
+@@ -103,6 +112,7 @@
+ 	if (i < 0)
+ 		return 1;
+ 	dup2(i, 1);
++	close(i);
+ 
+ 	/* Keep in sync with include/busybox.h! */
+ 
+@@ -234,11 +244,10 @@
+ //		}
+ 	}
+ 
+-	if (fclose(stdout))
+-		return 1;
+-	if (rename(tmp1, argv[1]))
+-		return 1;
+-	if (rename(tmp2, argv[2]))
+-		return 1;
++	fflush(stdout);
++	close(1);
++	rename(tmp1, argv[1]);
++	if (argv[2])
++		rename(tmp2, argv[2]);
+ 	return 0;
+ }
+diff --git a/include/libbb.h b/include/libbb.h
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -21,6 +21,9 @@
+ #include <setjmp.h>
+ #include <signal.h>
+ #include <paths.h>
++#ifndef BB_VER
++#define BB_VER "1.36.1"
++#endif
+ #if defined __UCLIBC__ /* TODO: and glibc? */
+ /* use inlined versions of these: */
+ # define sigfillset(s)    __sigfillset(s)
+@@ -380,7 +383,7 @@
+  * this optimization.
+  */
+ #ifndef BB_GLOBAL_CONST
+-# define BB_GLOBAL_CONST const
++# define BB_GLOBAL_CONST
+ #endif
+ 
+ #if defined(errno)
+@@ -2298,38 +2301,15 @@
+ 
+ #define barrier() asm volatile ("":::"memory")
+ 
+-#if defined(__clang_major__) && __clang_major__ >= 9
+-/* Clang/llvm drops assignment to "constant" storage. Silently.
+- * Needs serious convincing to not eliminate the store.
+- */
+-static ALWAYS_INLINE void* not_const_pp(const void *p)
+-{
+-	void *pp;
+-	asm volatile (
+-		"# forget that p points to const"
+-		: /*outputs*/ "=r" (pp)
+-		: /*inputs*/ "0" (p)
+-	);
+-	return pp;
+-}
+-# define ASSIGN_CONST_PTR(pptr, v) do { \
+-	*(void**)not_const_pp(pptr) = (void*)(v); \
++#define ASSIGN_CONST_PTR(pptr, v) do { \
++	*(void**)(pptr) = (void*)(v); \
+ 	barrier(); \
+ } while (0)
+-/* XZALLOC_CONST_PTR() is an out-of-line function to prevent
+- * clang from reading pointer before it is assigned.
+- */
+-void XZALLOC_CONST_PTR(const void *pptr, size_t size) FAST_FUNC;
+-#else
+-# define ASSIGN_CONST_PTR(pptr, v) do { \
+-	*(void**)(pptr) = (void*)(v); \
+-	/* At least gcc 3.4.6 on mipsel needs optimization barrier */ \
++#define XZALLOC_CONST_PTR(pptr, size) ASSIGN_CONST_PTR(pptr, xzalloc(size))
++#define SET_PTR_TO_GLOBALS(x) do { \
++	ptr_to_globals = (void*)(x); \
+ 	barrier(); \
+ } while (0)
+-# define XZALLOC_CONST_PTR(pptr, size) ASSIGN_CONST_PTR(pptr, xzalloc(size))
+-#endif
+-
+-#define SET_PTR_TO_GLOBALS(x) ASSIGN_CONST_PTR(&ptr_to_globals, x)
+ #define FREE_PTR_TO_GLOBALS() do { \
+ 	if (ENABLE_FEATURE_CLEAN_UP) { \
+ 		free(ptr_to_globals); \
+diff --git a/procps/ps.c b/procps/ps.c
+--- a/procps/ps.c
++++ b/procps/ps.c
+@@ -111,2 +111,10 @@
+ #include "libbb.h"
+ #include "common_bufsiz.h"
++
++/* NT has no Linux procfs; use its live process information API. */
++extern int ntps_main(int argc, char **argv);
++int ps_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
++int ps_main(int argc, char **argv) { return ntps_main(argc, argv); }
++/* Preserve the upstream implementation under a separate symbol. */
++#define ps_main linux_procps_main
++

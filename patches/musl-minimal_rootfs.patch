@@ -1,0 +1,245 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This license covers project changes; upstream context keeps its original license.
+diff --git a/arch/i386/pthread_arch.h b/arch/i386/pthread_arch.h
+--- a/arch/i386/pthread_arch.h
++++ b/arch/i386/pthread_arch.h
+@@ -1,7 +1,7 @@
+ static inline uintptr_t __get_tp()
+ {
+ 	uintptr_t tp;
+-	__asm__ ("movl %%gs:0,%0" : "=r" (tp) );
++	__asm__ ("movl %%fs:0x14,%0" : "=r" (tp) );
+ 	return tp;
+ }
+ 
+diff --git a/arch/i386/syscall_arch.h b/arch/i386/syscall_arch.h
+--- a/arch/i386/syscall_arch.h
++++ b/arch/i386/syscall_arch.h
+@@ -3,83 +3,41 @@
+ ((union { long long ll; long l[2]; }){ .ll = x }).l[1]
+ #define __SYSCALL_LL_O(x) __SYSCALL_LL_E((x))
+ 
+-#if SYSCALL_NO_TLS
+-#define SYSCALL_INSNS "int $128"
+-#else
+-#define SYSCALL_INSNS "call *%%gs:16"
+-#endif
+-
+-#define SYSCALL_INSNS_12 "xchg %%ebx,%%edx ; " SYSCALL_INSNS " ; xchg %%ebx,%%edx"
+-#define SYSCALL_INSNS_34 "xchg %%ebx,%%edi ; " SYSCALL_INSNS " ; xchg %%ebx,%%edi"
++long __nt_linux_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6);
+ 
+ static inline long __syscall0(long n)
+ {
+-	unsigned long __ret;
+-	__asm__ __volatile__ (SYSCALL_INSNS : "=a"(__ret) : "a"(n) : "memory");
+-	return __ret;
++	return __nt_linux_syscall(n, 0, 0, 0, 0, 0, 0);
+ }
+ 
+ static inline long __syscall1(long n, long a1)
+ {
+-	unsigned long __ret;
+-	__asm__ __volatile__ (SYSCALL_INSNS_12 : "=a"(__ret) : "a"(n), "d"(a1) : "memory");
+-	return __ret;
++	return __nt_linux_syscall(n, (long)(a1), 0, 0, 0, 0, 0);
+ }
+ 
+ static inline long __syscall2(long n, long a1, long a2)
+ {
+-	unsigned long __ret;
+-	__asm__ __volatile__ (SYSCALL_INSNS_12 : "=a"(__ret) : "a"(n), "d"(a1), "c"(a2) : "memory");
+-	return __ret;
++	return __nt_linux_syscall(n, (long)(a1), (long)(a2), 0, 0, 0, 0);
+ }
+ 
+ static inline long __syscall3(long n, long a1, long a2, long a3)
+ {
+-	unsigned long __ret;
+-#if !defined(__PIC__) || !defined(BROKEN_EBX_ASM)
+-	__asm__ __volatile__ (SYSCALL_INSNS : "=a"(__ret) : "a"(n), "b"(a1), "c"(a2), "d"(a3) : "memory");
+-#else
+-	__asm__ __volatile__ (SYSCALL_INSNS_34 : "=a"(__ret) : "a"(n), "D"(a1), "c"(a2), "d"(a3) : "memory");
+-#endif
+-	return __ret;
++	return __nt_linux_syscall(n, (long)(a1), (long)(a2), (long)(a3), 0, 0, 0);
+ }
+ 
+ static inline long __syscall4(long n, long a1, long a2, long a3, long a4)
+ {
+-	unsigned long __ret;
+-#if !defined(__PIC__) || !defined(BROKEN_EBX_ASM)
+-	__asm__ __volatile__ (SYSCALL_INSNS : "=a"(__ret) : "a"(n), "b"(a1), "c"(a2), "d"(a3), "S"(a4) : "memory");
+-#else
+-	__asm__ __volatile__ (SYSCALL_INSNS_34 : "=a"(__ret) : "a"(n), "D"(a1), "c"(a2), "d"(a3), "S"(a4) : "memory");
+-#endif
+-	return __ret;
++	return __nt_linux_syscall(n, (long)(a1), (long)(a2), (long)(a3), (long)(a4), 0, 0);
+ }
+ 
+ static inline long __syscall5(long n, long a1, long a2, long a3, long a4, long a5)
+ {
+-	unsigned long __ret;
+-#if !defined(__PIC__) || !defined(BROKEN_EBX_ASM)
+-	__asm__ __volatile__ (SYSCALL_INSNS
+-		: "=a"(__ret) : "a"(n), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5) : "memory");
+-#else
+-	__asm__ __volatile__ ("pushl %2 ; push %%ebx ; mov 4(%%esp),%%ebx ; " SYSCALL_INSNS " ; pop %%ebx ; add $4,%%esp"
+-		: "=a"(__ret) : "a"(n), "g"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5) : "memory");
+-#endif
+-	return __ret;
++	return __nt_linux_syscall(n, (long)(a1), (long)(a2), (long)(a3), (long)(a4), (long)(a5), 0);
+ }
+ 
+ static inline long __syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+ {
+-	unsigned long __ret;
+-#if !defined(__PIC__) || !defined(BROKEN_EBX_ASM)
+-	__asm__ __volatile__ ("pushl %7 ; push %%ebp ; mov 4(%%esp),%%ebp ; " SYSCALL_INSNS " ; pop %%ebp ; add $4,%%esp"
+-		: "=a"(__ret) : "a"(n), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), "g"(a6) : "memory");
+-#else
+-	unsigned long a1a6[2] = { a1, a6 };
+-	__asm__ __volatile__ ("pushl %1 ; push %%ebx ; push %%ebp ; mov 8(%%esp),%%ebx ; mov 4(%%ebx),%%ebp ; mov (%%ebx),%%ebx ; " SYSCALL_INSNS " ; pop %%ebp ; pop %%ebx ; add $4,%%esp"
+-		: "=a"(__ret) : "g"(&a1a6), "a"(n), "c"(a2), "d"(a3), "S"(a4), "D"(a5) : "memory");
+-#endif
+-	return __ret;
++	return __nt_linux_syscall(n, (long)(a1), (long)(a2), (long)(a3), (long)(a4), (long)(a5), (long)(a6));
+ }
+ 
+ #define VDSO_USEFUL
+diff --git a/src/env/__init_tls.c b/src/env/__init_tls.c
+--- a/src/env/__init_tls.c
++++ b/src/env/__init_tls.c
+@@ -9,17 +9,20 @@
+ #include "atomic.h"
+ #include "syscall.h"
+ 
++extern void shim_debug_print(const char *msg);
+ volatile int __thread_list_lock;
+ 
+ int __init_tp(void *p)
+ {
+ 	pthread_t td = p;
+ 	td->self = td;
++	shim_debug_print("[init_tp] calling __set_thread_area\n");
+ 	int r = __set_thread_area(TP_ADJ(p));
++	shim_debug_print("[init_tp] __set_thread_area returned\n");
+ 	if (r < 0) return -1;
+ 	if (!r) libc.can_do_threads = 1;
+ 	td->detach_state = DT_JOINABLE;
+-	td->tid = __syscall(SYS_set_tid_address, &__thread_list_lock);
++	td->tid = 1;
+ 	td->locale = &libc.global_locale;
+ 	td->robust_list.head = &td->robust_list.head;
+ 	td->sysinfo = __sysinfo;
+@@ -146,8 +149,12 @@
+ 	}
+ 
+ 	/* Failure to initialize thread pointer is always fatal. */
+-	if (__init_tp(__copy_tls(mem)) < 0)
++	shim_debug_print("[init_tls] calling __copy_tls and __init_tp\n");
++	if (__init_tp(__copy_tls(mem)) < 0) {
++		shim_debug_print("[init_tls] __init_tp FAILED!\n");
+ 		a_crash();
++	}
++	shim_debug_print("[init_tls] static_init_tls finished successfully!\n");
+ }
+ 
+ weak_alias(static_init_tls, __init_tls);
+diff --git a/src/env/__libc_start_main.c b/src/env/__libc_start_main.c
+--- a/src/env/__libc_start_main.c
++++ b/src/env/__libc_start_main.c
+@@ -17,43 +17,32 @@
+ 
+ #define AUX_CNT 38
+ 
++extern void shim_debug_print(const char *msg);
++
+ #ifdef __GNUC__
+ __attribute__((__noinline__))
+ #endif
+ void __init_libc(char **envp, char *pn)
+ {
+ 	size_t i, *auxv, aux[AUX_CNT] = { 0 };
++	shim_debug_print("[init_libc] 1. start\n");
+ 	__environ = envp;
+ 	for (i=0; envp[i]; i++);
+ 	libc.auxv = auxv = (void *)(envp+i+1);
+ 	for (i=0; auxv[i]; i+=2) if (auxv[i]<AUX_CNT) aux[auxv[i]] = auxv[i+1];
+ 	__hwcap = aux[AT_HWCAP];
+-	if (aux[AT_SYSINFO]) __sysinfo = aux[AT_SYSINFO];
+-	libc.page_size = aux[AT_PAGESZ];
++	libc.page_size = aux[AT_PAGESZ] ? aux[AT_PAGESZ] : 4096;
+ 
+ 	if (!pn) pn = (void*)aux[AT_EXECFN];
+-	if (!pn) pn = "";
++	if (!pn) pn = "busybox";
+ 	__progname = __progname_full = pn;
+ 	for (i=0; pn[i]; i++) if (pn[i]=='/') __progname = pn+i+1;
+ 
++	shim_debug_print("[init_libc] 2. calling __init_tls\n");
+ 	__init_tls(aux);
++	shim_debug_print("[init_libc] 3. calling __init_ssp\n");
+ 	__init_ssp((void *)aux[AT_RANDOM]);
+-
+-	if (aux[AT_UID]==aux[AT_EUID] && aux[AT_GID]==aux[AT_EGID]
+-		&& !aux[AT_SECURE]) return;
+-
+-	struct pollfd pfd[3] = { {.fd=0}, {.fd=1}, {.fd=2} };
+-	int r =
+-#ifdef SYS_poll
+-	__syscall(SYS_poll, pfd, 3, 0);
+-#else
+-	__syscall(SYS_ppoll, pfd, 3, &(struct timespec){0}, 0, _NSIG/8);
+-#endif
+-	if (r<0) a_crash();
+-	for (i=0; i<3; i++) if (pfd[i].revents&POLLNVAL)
+-		if (__sys_open("/dev/null", O_RDWR)<0)
+-			a_crash();
+-	libc.secure = 1;
++	shim_debug_print("[init_libc] 4. complete\n");
+ }
+ 
+ static void libc_start_init(void)
+diff --git a/src/malloc/mallocng/malloc.c b/src/malloc/mallocng/malloc.c
+--- a/src/malloc/mallocng/malloc.c
++++ b/src/malloc/mallocng/malloc.c
+@@ -296,8 +296,12 @@
+ 	return 0;
+ }
+ 
++extern void shim_debug_print(const char *msg);
++extern void shim_debug_hex(const char *prefix, unsigned long val);
++
+ void *malloc(size_t n)
+ {
++	shim_debug_hex("[malloc] n=", n);
+ 	if (size_overflows(n)) return 0;
+ 	struct meta *g;
+ 	uint32_t mask, first;
+@@ -376,7 +380,9 @@
+ success:
+ 	ctr = ctx.mmap_counter;
+ 	unlock();
+-	return enframe(g, idx, n, ctr);
++	void *res = enframe(g, idx, n, ctr);
++	shim_debug_hex("[malloc] ret=", (unsigned long)res);
++	return res;
+ }
+ 
+ int is_allzero(void *p)
+diff --git a/src/thread/__set_thread_area.c b/src/thread/__set_thread_area.c
+--- a/src/thread/__set_thread_area.c
++++ b/src/thread/__set_thread_area.c
+@@ -2,9 +2,6 @@
+ 
+ int __set_thread_area(void *p)
+ {
+-#ifdef SYS_set_thread_area
+-	return __syscall(SYS_set_thread_area, p);
+-#else
+-	return -ENOSYS;
+-#endif
++	__asm__ volatile ("movl %0, %%fs:0x14" :: "r"(p) : "memory");
++	return 0;
+ }

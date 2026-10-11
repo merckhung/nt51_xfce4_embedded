@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef _NEW_
+#define _NEW_
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+void * __cdecl operator new(size_t size);
+void * __cdecl operator new[](size_t size);
+void   __cdecl operator delete(void *ptr);
+void   __cdecl operator delete[](void *ptr);
+
+inline void * __cdecl operator new(size_t, void *p) { return p; }
+inline void * __cdecl operator new[](size_t, void *p) { return p; }
+inline void   __cdecl operator delete(void *, void *) {}
+inline void   __cdecl operator delete[](void *, void *) {}
+#endif
+
+#endif /* _NEW_ */

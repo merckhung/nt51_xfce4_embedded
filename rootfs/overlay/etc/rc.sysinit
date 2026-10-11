@@ -1,0 +1,61 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+echo "[rc.sysinit] Windows XP Embedded 3 (Alpine XFCE 4.18 + Xvfb + USB + RTL8139) initializing..."
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+export USER=root
+export TERM=vt100
+export DISPLAY=:0
+export GDK_BACKEND=x11
+export XLIB_SKIP_ARGB_VISUALS=1
+export NO_AT_BRIDGE=1
+export LD_LIBRARY_PATH=/lib:/usr/lib
+export XDG_MENU_PREFIX=xfce-
+export XDG_CONFIG_HOME=/root/.config
+export XDG_CONFIG_DIRS=/etc/xdg
+export XDG_DATA_DIRS=/usr/share
+export XDG_RUNTIME_DIR=/tmp
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session
+
+mkdir -p /tmp/.X11-unix /tmp/.ICE-unix /var/run /root/.config /root/Desktop
+
+insmod /lib/modules/fbdrv.sys
+insmod /lib/modules/pcspeaker.sys
+insmod /lib/modules/usbdrv.sys
+insmod /lib/modules/rtl8139.sys
+ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up
+echo "[rc.sysinit] Loaded fbdrv.sys (/dev/fb0), usbdrv.sys, rtl8139.sys (/dev/eth0)."
+
+echo "[rc.sysinit] Generating MIME and image loader caches..."
+/usr/bin/update-mime-database /usr/share/mime || exit 1
+/usr/bin/gdk-pixbuf-query-loaders --update-cache || exit 1
+
+echo "[rc.sysinit] Starting real Xvfb :0 (800x600x24)..."
+/usr/bin/Xvfb :0 -screen 0 800x600x24 -fbdir /tmp -nolisten tcp -ac -noreset -retro -extension MIT-SHM &
+sleep 3
+
+echo "[rc.sysinit] Starting x11_fb_bridge (Xvfb -> /dev/fb0 + PS/2 Mouse/Keyboard XTEST)..."
+/usr/bin/x11_fb_bridge &
+
+echo "[rc.sysinit] Starting D-Bus session bus & xfconfd..."
+/usr/bin/glib-compile-schemas /usr/share/glib-2.0/schemas
+/usr/bin/dbus-daemon --session --address=unix:path=/tmp/dbus-session --nofork --nopidfile &
+sleep 1
+/usr/lib/xfce4/xfconf/xfconfd &
+sleep 2
+
+echo "[rc.sysinit] Starting real XFCE 4.18 desktop (xfwm4, xfdesktop, xfce4-panel, xfce4-terminal)..."
+/usr/bin/xfwm4 --compositor=off &
+sleep 2
+/usr/bin/xfdesktop --disable-wm-check &
+sleep 1
+/usr/bin/xfce4-panel --disable-wm-check &
+sleep 2
+/usr/bin/xfce4-terminal --geometry=100x25+20+55 &
+sleep 3
+echo "[rc.sysinit] XFCE 4.18 desktop launched."
+/usr/bin/xfce-probe &
+ps aux > /tmp/ps-boot.txt
+ps_status=$?
+echo "[rc.sysinit] PS_AUX_EXIT=$ps_status"
+[ "$ps_status" -eq 0 ] || exit 1

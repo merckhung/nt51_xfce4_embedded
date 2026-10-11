@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+bazel-*
+MODULE.bazel.lock
+out/
+runtime/
+*.pyc
+__pycache__/
+*.img
+*.qcow2
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.elf
+*.apk
+*.dll
+*.sys
+*.pdb
+*.map
+*.log

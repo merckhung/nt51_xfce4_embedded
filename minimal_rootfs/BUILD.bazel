@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+load("//bazel:embedded.bzl", "embedded_build")
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "sources", srcs = glob(["**"], exclude = ["BUILD.bazel"]))
+embedded_build(
+    name = "system", operation = "minimal_rootfs", handler = "//tools:build_userspace.py", config = "//tools:build-config.json",
+    nt = "@nt51//:UPSTREAM_COMMIT", musl = "@musl_minimal//:RELEASE", busybox = "@busybox//:RELEASE",
+    srcs = [":sources", "//tests:sources", "//native:sources", "//tools:busybox_sources.py", "@nt51//:source_tree", "@musl_minimal//:sources", "@busybox//:sources"],
+    deps = ["//:native", "//:boot_support"],
+)
+embedded_build(
+    name = "usb_image", operation = "minimal_image", handler = "//tools:mkimage.py", config = "//tools:build-config.json",
+    nt = "@nt51//:UPSTREAM_COMMIT", srcs = [":sources", "//tools:fat16.py", "@nt51//:source_tree"],
+    deps = [":system", "//:native", "//:boot_support", "//:kernel_bundle"],
+)

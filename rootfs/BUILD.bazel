@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+load("//bazel:embedded.bzl", "embedded_build")
+package(default_visibility = ["//visibility:public"])
+exports_files(["alpine-packages.json"])
+filegroup(name = "sources", srcs = glob(["**"], exclude = ["BUILD.bazel"]))
+filegroup(name = "build_sources", srcs = glob(["**"], exclude = ["BUILD.bazel", "overlay/**", "alpine-packages.json"]))
+embedded_build(
+    name = "system", operation = "rootfs", handler = "//tools:build_userspace.py", config = "//tools:build-config.json",
+    nt = "@nt51//:UPSTREAM_COMMIT", musl = "@musl_xfce//:RELEASE", busybox = "@busybox//:RELEASE",
+    srcs = [":build_sources", "//tests:sources", "//native:sources", "//tools:busybox_sources.py", "@nt51//:source_tree", "@musl_xfce//:sources", "@busybox//:sources"],
+    deps = ["//:native", "//:boot_support", "//minimal_rootfs:usb_image"],
+)
+embedded_build(
+    name = "usb_image", operation = "xfce_image", handler = "//tools:mkimage.py", config = "//tools:build-config.json",
+    nt = "@nt51//:UPSTREAM_COMMIT", alpine = "@alpine_xfce//:RELEASE",
+    srcs = [":sources", "//tools:fat16.py", "@nt51//:source_tree", "@alpine_xfce//:apks"],
+    deps = [":system", "//:native", "//:boot_support", "//:kernel_bundle"],
+)

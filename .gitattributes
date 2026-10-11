@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+* text=auto
+*.cmd text eol=crlf
+*.py text eol=lf
+*.bzl text eol=lf
+*.bazel text eol=lf
+*.patch text eol=lf
+*.sh text eol=lf
+rc.sysinit text eol=lf
+*.png binary

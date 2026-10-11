@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+build --spawn_strategy=local
+build --jobs=12
+build --color=yes
+build --show_progress_rate_limit=5
+build --action_env=PATH
+build --action_env=SYSTEMROOT
+build --action_env=TEMP
+build --action_env=TMP

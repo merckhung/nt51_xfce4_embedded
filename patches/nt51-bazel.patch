@@ -1,0 +1,4832 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This license covers project changes; upstream context keeps its original license.
+diff --git a/bazel/legacy/BUILD.bazel b/bazel/legacy/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/BUILD.bazel
+@@ -0,0 +1,13 @@
++package(default_visibility = ["//visibility:public"])
++
++exports_files([
++    "cl_wrapper.cmd",
++    "genlvl_wrapper.cmd",
++    "ke_services_wrapper.cmd",
++    "preprocess_wrapper.cmd",
++    "kernel_link_wrapper.cmd",
++    "lib_wrapper.cmd",
++    "ml_wrapper.cmd",
++])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/bazel/legacy/cl_wrapper.cmd b/bazel/legacy/cl_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/cl_wrapper.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++set "TOOL_DIR=%~1"
++set "RESPONSE_FILE=%~2"
++set "PATH=%TOOL_DIR%;%PATH%"
++
++"%TOOL_DIR%\cl.exe" @"%RESPONSE_FILE%"
++exit /b %errorlevel%
+diff --git a/bazel/legacy/genlvl_wrapper.cmd b/bazel/legacy/genlvl_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/genlvl_wrapper.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++for %%I in ("%~1") do set "TOOL=%%~fI"
++for %%I in ("%~2") do set "INPUT_DIR=%%~fI"
++for %%I in ("%~3") do set "OUTPUT_DIR=%%~fI"
++cd /d "%INPUT_DIR%"
++"%TOOL%" -t "%OUTPUT_DIR%"
++exit /b %errorlevel%
+diff --git a/bazel/legacy/ke_services_wrapper.cmd b/bazel/legacy/ke_services_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/ke_services_wrapper.cmd
+@@ -0,0 +1,14 @@
++@echo off
++setlocal
++for %%I in ("%~1") do set "TOOLDIR=%%~fI"
++set "SOURCE=%~2"
++set "OUTDIR=%~3"
++set "STUBDIR=%~4"
++if not exist "%OUTDIR%" mkdir "%OUTDIR%" || exit /b 1
++"%TOOLDIR%\cl.exe" /nologo /EP /D_X86_=1 /Di386=1 "%SOURCE%" > "%OUTDIR%\services.tab" || exit /b 1
++copy "%STUBDIR%\table.stb" "%OUTDIR%\table.stb" >nul || exit /b 1
++copy "%STUBDIR%\services.stb" "%OUTDIR%\services.stb" >nul || exit /b 1
++cd /d "%OUTDIR%"
++rem gensrv has fixed-size path buffers; use short paths inside the output directory.
++"%TOOLDIR%\gensrv.exe" -e asm -g . || exit /b 1
++exit /b 0
+diff --git a/bazel/legacy/kernel_link_wrapper.cmd b/bazel/legacy/kernel_link_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/kernel_link_wrapper.cmd
+@@ -0,0 +1,11 @@
++@echo off
++setlocal
++set "TOOLDIR=%~1"
++set "RSP=%~2"
++set "IMAGE=%~3"
++set "PATH=%TOOLDIR%;%PATH%"
++"%TOOLDIR%\link.exe" @"%RSP%"
++if errorlevel 1 exit /b 1
++"%TOOLDIR%\link.exe" -edit -nologo -section:.rsrc,!d "%IMAGE%"
++if errorlevel 1 exit /b 1
++exit /b 0
+diff --git a/bazel/legacy/lib_wrapper.cmd b/bazel/legacy/lib_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/lib_wrapper.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++set "TOOL_DIR=%~1"
++set "RESPONSE_FILE=%~2"
++set "PATH=%TOOL_DIR%;%PATH%"
++
++"%TOOL_DIR%\lib.exe" @"%RESPONSE_FILE%"
++exit /b %errorlevel%
+diff --git a/bazel/legacy/ml_wrapper.cmd b/bazel/legacy/ml_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/ml_wrapper.cmd
+@@ -0,0 +1,8 @@
++@echo off
++setlocal
++set "TOOL_DIR=%~1"
++set "RESPONSE_FILE=%~2"
++set "PATH=%TOOL_DIR%;%PATH%"
++
++"%TOOL_DIR%\ml.exe" @"%RESPONSE_FILE%"
++exit /b %errorlevel%
+diff --git a/bazel/legacy/nt5_rules.bzl b/bazel/legacy/nt5_rules.bzl
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/nt5_rules.bzl
+@@ -0,0 +1,897 @@
++"""Rules that invoke the original NT 5 x86 compiler and librarian."""
++
++Nt5ObjectsInfo = provider(
++    doc = "Object files emitted by an NT5 C compilation target.",
++    fields = {"objects": "depset of COFF object files"},
++)
++
++Nt5IncludeInfo = provider(
++    doc = "Generated include directory and the files that materialize it.",
++    fields = {
++        "directory": "include directory File",
++        "files": "depset containing the generated directory",
++    },
++)
++
++Nt5PchInfo = provider(
++    doc = "VC7 precompiled-header state and its companion archive object.",
++    fields = {
++        "header_name": "header basename passed to /Yu",
++        "pch": "the generated PCH file",
++        "files": "depset containing the PCH and object",
++    },
++)
++
++Nt5DefInfo = provider(fields = {"def_file": "preprocessed module-definition file"})
++Nt5ImportInfo = provider(fields = {"exp": "export object", "library": "import library"})
++
++_FREE_X86_COPTS = [
++    "/nologo",
++    "/c",
++    "/Zel",
++    "/Zp8",
++    "/Gy",
++    "/WX",
++    "/G6",
++    "/Gi-",
++    "/Gm-",
++    "/GX-",
++    "/GR-",
++    "/GF",
++    "/QIfdiv-",
++    "/QIf",
++    "/Oxs",
++    "/Gz",
++    "/Z7",
++    "/FIwarning.h",
++]
++
++_FREE_X86_DEFINES = [
++    "_X86_=1",
++    "i386=1",
++    "CONDITION_HANDLING=1",
++    "WIN32_LEAN_AND_MEAN=1",
++    "WIN32=100",
++    "_NT1X_=100",
++    "WINNT=1",
++    "_WIN32_WINNT=0x0501",
++    "WINVER=0x0501",
++    "NT_INST=0",
++    "STD_CALL=1",
++    "DEVL=1",
++]
++
++def _is_checked(ctx):
++    return ctx.var.get("nt5_checked", "false").lower() == "true"
++
++def _flavor_defines(ctx):
++    return ["DBG=1", "FPO=0"] if _is_checked(ctx) else ["DBG=0", "FPO=1"]
++
++def _flavor_copts(ctx):
++    return ["/cbstring", "/Oy-"] if _is_checked(ctx) else ["/Oy"]
++
++def _variant_defines(ctx, variant):
++    result = []
++    # build.exe deliberately compiles every checked kernel with the MP locking
++    # model, including targets named up/pae.
++    if not _is_checked(ctx) and variant in ["up", "pae"]:
++        result.append("NT_UP=1")
++    # The legacy UP and PAE objects omit SMT scheduling. MP and PAEMP
++    # include it in both Free and Checked builds.
++    if variant in ["mp", "paemp"]:
++        result.append("NT_SMT")
++    if variant in ["pae", "paemp"]:
++        result.append("_X86PAE_")
++    return result
++
++def _source_includes(ctx):
++    return [(ctx.label.workspace_root + "/" + p) if ctx.label.workspace_root else p for p in ctx.attr.includes]
++
++def _quote(value):
++    return "\"%s\"" % value.replace("\"", "\\\"")
++
++def _nt5_cl_objects_impl(ctx):
++    outputs = []
++    used_basenames = {}
++
++    for src in ctx.files.srcs:
++        basename = src.basename.rsplit(".", 1)[0]
++        if basename.lower() in used_basenames:
++            fail("duplicate source basename '%s' is not supported in one target" % basename)
++        used_basenames[basename.lower()] = True
++
++        output = ctx.actions.declare_file("%s.objects/%s.obj" % (ctx.label.name, basename))
++        response = ctx.actions.declare_file("%s.objects/%s.cl.rsp" % (ctx.label.name, basename))
++        response_lines = _FREE_X86_COPTS[:]
++        if not any([opt.upper().startswith("/W") and opt.upper() != "/WX" for opt in ctx.attr.copts]):
++            response_lines.append("/W3")
++        response_lines.extend(_flavor_copts(ctx) + ctx.attr.copts)
++        response_lines.extend(["/D%s" % define for define in _FREE_X86_DEFINES + _flavor_defines(ctx) + _variant_defines(ctx, ctx.attr.variant) + ctx.attr.defines])
++        generated_include_paths = [dep[Nt5IncludeInfo].directory.path for dep in ctx.attr.generated_headers]
++        response_lines.extend(["/I%s" % _quote(path) for path in _source_includes(ctx) + generated_include_paths])
++        pch_inputs = []
++        pch_transitive = []
++        if ctx.attr.pch:
++            pch_info = ctx.attr.pch[Nt5PchInfo]
++            response_lines.extend([
++                "/Yu%s" % pch_info.header_name,
++                "/Fp%s" % _quote(pch_info.pch.path),
++            ])
++            pch_transitive.append(pch_info.files)
++        response_lines.extend([
++            "/Fo%s" % _quote(output.path),
++            _quote(src.path),
++        ])
++        ctx.actions.write(response, "\r\n".join(response_lines) + "\r\n")
++
++        ctx.actions.run(
++            executable = ctx.executable._cl_wrapper,
++            arguments = [ctx.file._cl.dirname, response.path],
++            inputs = depset(
++                direct = [src, response] + ctx.files.hdrs,
++                transitive = [ctx.attr._tool_payload[DefaultInfo].files] + [dep[Nt5IncludeInfo].files for dep in ctx.attr.generated_headers] + pch_transitive,
++            ),
++            outputs = [output],
++            mnemonic = "Nt5LegacyCl",
++            progress_message = "Compiling %s with the NT 5 VC7 x86 compiler" % src.short_path,
++            use_default_shell_env = False,
++        )
++        outputs.append(output)
++
++    object_set = depset(outputs)
++    return [
++        DefaultInfo(files = object_set),
++        Nt5ObjectsInfo(objects = object_set),
++    ]
++
++nt5_cl_objects = rule(
++    implementation = _nt5_cl_objects_impl,
++    attrs = {
++        "srcs": attr.label_list(allow_files = [".c"], mandatory = True),
++        "hdrs": attr.label_list(allow_files = True),
++        "includes": attr.string_list(),
++        "defines": attr.string_list(),
++        "copts": attr.string_list(),
++        "variant": attr.string(default = "up", values = ["up", "mp", "pae", "paemp"]),
++        "generated_headers": attr.label_list(providers = [Nt5IncludeInfo]),
++        "pch": attr.label(providers = [Nt5PchInfo]),
++        "_cl": attr.label(
++            allow_single_file = True,
++            default = Label("//Source/XPSP1/NT/tools/x86:cl.exe"),
++        ),
++        "_cl_wrapper": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//bazel/legacy:cl_wrapper.cmd"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(
++            default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload"),
++        ),
++    },
++)
++
++def _nt5_static_library_impl(ctx):
++    objects = depset(transitive = [dep[Nt5ObjectsInfo].objects for dep in ctx.attr.deps])
++    output = ctx.actions.declare_file(ctx.label.name + ".lib")
++    response = ctx.actions.declare_file(ctx.label.name + ".lib.rsp")
++    response_lines = [
++        "/nologo",
++        "/WX",
++        "/nodefaultlib",
++        "/machine:ix86",
++        "/IGNORE:4010,4037,4039,4065,4070,4078,4087,4089,4198,4221",
++        "/out:%s" % _quote(output.path),
++    ]
++    response_lines.extend([_quote(obj.path) for obj in objects.to_list()])
++    ctx.actions.write(response, "\r\n".join(response_lines) + "\r\n")
++
++    ctx.actions.run(
++        executable = ctx.executable._lib_wrapper,
++        arguments = [ctx.file._lib.dirname, response.path],
++        inputs = depset(
++            direct = [response],
++            transitive = [objects, ctx.attr._tool_payload[DefaultInfo].files],
++        ),
++        outputs = [output],
++        mnemonic = "Nt5LegacyLib",
++        progress_message = "Archiving %{label} with the NT 5 VC7 x86 librarian",
++        use_default_shell_env = False,
++    )
++    return [DefaultInfo(files = depset([output]))]
++
++nt5_static_library = rule(
++    implementation = _nt5_static_library_impl,
++    attrs = {
++        "deps": attr.label_list(
++            mandatory = True,
++            providers = [Nt5ObjectsInfo],
++        ),
++        "_lib": attr.label(
++            allow_single_file = True,
++            default = Label("//Source/XPSP1/NT/tools/x86:lib.exe"),
++        ),
++        "_lib_wrapper": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//bazel/legacy:lib_wrapper.cmd"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(
++            default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload"),
++        ),
++    },
++)
++
++def _nt5_ml_object_impl(ctx):
++    stem = ctx.file.src.basename.rsplit(".", 1)[0]
++    output = ctx.actions.declare_file(ctx.label.name + ".ml-files/" + stem + ".obj")
++    # A number of HAL assembly files are source-level links that include a
++    # same-named file from halx86.  Give the normalized driver file a distinct
++    # basename so MASM resolves that include through /I instead of recursively
++    # opening the generated input itself.
++    normalized_src = ctx.actions.declare_file(ctx.label.name + ".ml-files/input_" + ctx.file.src.basename)
++    ctx.actions.expand_template(
++        template = ctx.file.src,
++        output = normalized_src,
++        substitutions = {
++            "..\\..\\vdm\\i386\\vdm.inc": "vdm.inc",
++            "..\\..\\halx86\\i386\\": "",
++            "..\\..\\halmps\\i386\\": "",
++        },
++    )
++    response = ctx.actions.declare_file(ctx.label.name + ".ml.rsp")
++    lines = [
++        "/nologo",
++        "/c",
++        "/coff",
++        "/Cx",
++        "/Zm",
++        "/Zi",
++    ]
++    lines.extend(["/D%s" % define for define in _FREE_X86_DEFINES + _flavor_defines(ctx) + _variant_defines(ctx, ctx.attr.variant) + ctx.attr.defines])
++    generated_include_paths = [dep[Nt5IncludeInfo].directory.path for dep in ctx.attr.generated_headers]
++    lines.extend(["/I%s" % _quote(path) for path in _source_includes(ctx) + generated_include_paths])
++    lines.extend(["/Fo%s" % _quote(output.path), _quote(normalized_src.path)])
++    ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++
++    ctx.actions.run(
++        executable = ctx.executable._wrapper,
++        arguments = [ctx.file._ml.dirname, response.path],
++        inputs = depset(
++            direct = [normalized_src, response] + ctx.files.hdrs,
++            transitive = [ctx.attr._tool_payload[DefaultInfo].files] + [dep[Nt5IncludeInfo].files for dep in ctx.attr.generated_headers],
++        ),
++        outputs = [output],
++        mnemonic = "Nt5LegacyMl",
++        progress_message = "Assembling %{label} with the NT 5 x86 MASM",
++        use_default_shell_env = False,
++    )
++    return [DefaultInfo(files = depset([output])), Nt5ObjectsInfo(objects = depset([output]))]
++
++nt5_ml_object = rule(
++    implementation = _nt5_ml_object_impl,
++    attrs = {
++        "src": attr.label(allow_single_file = [".asm", ".s"], mandatory = True),
++        "hdrs": attr.label_list(allow_files = True),
++        "includes": attr.string_list(),
++        "defines": attr.string_list(),
++        "variant": attr.string(default = "up", values = ["up", "mp", "pae", "paemp"]),
++        "generated_headers": attr.label_list(providers = [Nt5IncludeInfo]),
++        "_ml": attr.label(
++            allow_single_file = True,
++            default = Label("//Source/XPSP1/NT/tools/x86:ml.exe"),
++        ),
++        "_wrapper": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//bazel/legacy:ml_wrapper.cmd"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_prebuilt_objects_impl(ctx):
++    object_set = depset(ctx.files.srcs)
++    return [DefaultInfo(files = object_set), Nt5ObjectsInfo(objects = object_set)]
++
++nt5_prebuilt_objects = rule(
++    implementation = _nt5_prebuilt_objects_impl,
++    attrs = {"srcs": attr.label_list(allow_files = [".obj"], mandatory = True)},
++)
++
++def _nt5_ke_services_objects_impl(ctx):
++    generated = ctx.actions.declare_directory(ctx.label.name + ".services")
++    ctx.actions.run(
++        executable = ctx.executable._generator_wrapper,
++        arguments = [ctx.file._gensrv.dirname, ctx.file.services.path, generated.path, ctx.file.table_stub.dirname],
++        inputs = depset(
++            direct = [ctx.file.services, ctx.file.table_stub, ctx.file.services_stub],
++            transitive = [ctx.attr._tool_payload[DefaultInfo].files],
++        ),
++        outputs = [generated],
++        mnemonic = "Nt5GenServices",
++        progress_message = "Generating x86 system-service tables for %{label}",
++        use_default_shell_env = False,
++    )
++
++    objects = []
++    for stem in ["sysstubs", "systable"]:
++        output = ctx.actions.declare_file(ctx.label.name + ".service-objects/" + stem + ".obj")
++        response = ctx.actions.declare_file(ctx.label.name + ".service-objects/" + stem + ".ml.rsp")
++        lines = ["/nologo", "/c", "/coff", "/Cx", "/Zm", "/Zi"]
++        lines.extend(["/D%s" % define for define in _FREE_X86_DEFINES + _flavor_defines(ctx) + _variant_defines(ctx, ctx.attr.variant) + ctx.attr.defines])
++        generated_include_paths = [dep[Nt5IncludeInfo].directory.path for dep in ctx.attr.generated_headers]
++        lines.extend(["/I%s" % _quote(path) for path in [generated.path] + _source_includes(ctx) + generated_include_paths])
++        lines.extend(["/Fo%s" % _quote(output.path), _quote(generated.path + "/" + stem + ".asm")])
++        ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++        ctx.actions.run(
++            executable = ctx.executable._ml_wrapper,
++            arguments = [ctx.file._ml.dirname, response.path],
++            inputs = depset(
++                direct = [generated, response] + ctx.files.hdrs,
++                transitive = [ctx.attr._tool_payload[DefaultInfo].files] + [dep[Nt5IncludeInfo].files for dep in ctx.attr.generated_headers],
++            ),
++            outputs = [output],
++            mnemonic = "Nt5LegacyMl",
++            progress_message = "Assembling generated %s for %%{label}" % stem,
++            use_default_shell_env = False,
++        )
++        objects.append(output)
++    object_set = depset(objects)
++    return [DefaultInfo(files = object_set), Nt5ObjectsInfo(objects = object_set)]
++
++nt5_ke_services_objects = rule(
++    implementation = _nt5_ke_services_objects_impl,
++    attrs = {
++        "services": attr.label(allow_single_file = True, mandatory = True),
++        "table_stub": attr.label(allow_single_file = True, mandatory = True),
++        "services_stub": attr.label(allow_single_file = True, mandatory = True),
++        "hdrs": attr.label_list(allow_files = True),
++        "includes": attr.string_list(),
++        "defines": attr.string_list(),
++        "variant": attr.string(default = "up", values = ["up", "mp", "pae", "paemp"]),
++        "generated_headers": attr.label_list(providers = [Nt5IncludeInfo]),
++        "_gensrv": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:gensrv.exe")),
++        "_ml": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:ml.exe")),
++        "_generator_wrapper": attr.label(allow_single_file = True, cfg = "exec", default = Label("//bazel/legacy:ke_services_wrapper.cmd"), executable = True),
++        "_ml_wrapper": attr.label(allow_single_file = True, cfg = "exec", default = Label("//bazel/legacy:ml_wrapper.cmd"), executable = True),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_rc_resource_impl(ctx):
++    stem = ctx.file.src.basename.rsplit(".", 1)[0]
++    output = ctx.actions.declare_file(ctx.label.name + ".rc-files/" + stem + ".res")
++    lines = ["/r"]
++    for define in ctx.attr.defines:
++        lines.extend(["/d", define])
++    generated_include_paths = [dep[Nt5IncludeInfo].directory.path for dep in ctx.attr.generated_headers]
++    for path in _source_includes(ctx) + generated_include_paths:
++        lines.extend(["/i", path])
++    lines.extend(["/fo", output.path, ctx.file.src.path])
++
++    ctx.actions.run(
++        executable = ctx.executable._rc,
++        arguments = lines,
++        inputs = depset(
++            direct = [ctx.file.src] + ctx.files.hdrs,
++            transitive = [ctx.attr._tool_payload[DefaultInfo].files] + [dep[Nt5IncludeInfo].files for dep in ctx.attr.generated_headers],
++        ),
++        outputs = [output],
++        mnemonic = "Nt5LegacyRc",
++        progress_message = "Compiling %{label} with the NT 5 resource compiler",
++        use_default_shell_env = False,
++    )
++    output_set = depset([output])
++    return [DefaultInfo(files = output_set), Nt5ObjectsInfo(objects = output_set)]
++
++nt5_rc_resource = rule(
++    implementation = _nt5_rc_resource_impl,
++    attrs = {
++        "src": attr.label(allow_single_file = [".rc"], mandatory = True),
++        "hdrs": attr.label_list(allow_files = True),
++        "includes": attr.string_list(),
++        "defines": attr.string_list(),
++        "generated_headers": attr.label_list(providers = [Nt5IncludeInfo]),
++        "_rc": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//Source/XPSP1/NT/tools/x86:rc.exe"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_message_impl(ctx):
++    output_dir = ctx.actions.declare_directory(ctx.label.name + ".mc")
++    args = [
++        "-h",
++        output_dir.path,
++        "-r",
++        output_dir.path,
++    ]
++    args.extend(ctx.attr.options)
++    args.append(ctx.file.src.path)
++
++    ctx.actions.run(
++        executable = ctx.executable._mc,
++        arguments = args,
++        inputs = depset(
++            direct = [ctx.file.src],
++            transitive = [ctx.attr._tool_payload[DefaultInfo].files],
++        ),
++        outputs = [output_dir],
++        mnemonic = "Nt5LegacyMc",
++        progress_message = "Compiling %{label} with the NT 5 message compiler",
++        use_default_shell_env = False,
++    )
++    output_set = depset([output_dir])
++    return [DefaultInfo(files = output_set), Nt5IncludeInfo(directory = output_dir, files = output_set)]
++
++nt5_message = rule(
++    implementation = _nt5_message_impl,
++    attrs = {
++        "src": attr.label(allow_single_file = [".mc"], mandatory = True),
++        "options": attr.string_list(),
++        "_mc": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//Source/XPSP1/NT/tools/x86:mc.exe"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_pch_impl(ctx):
++    # Preserve the legacy companion object basename (for example cc.obj).  The
++    # librarian records this basename in the archive member table, so naming
++    # the file after the Bazel target would prevent byte-level graph parity.
++    stem = ctx.file.header.basename.rsplit(".", 1)[0]
++    pch = ctx.actions.declare_file(ctx.label.name + ".pch-files/" + stem + ".pch")
++    obj = ctx.actions.declare_file(ctx.label.name + ".pch-files/" + stem + ".obj")
++    source = ctx.actions.declare_file(ctx.label.name + ".pch.c")
++    response = ctx.actions.declare_file(ctx.label.name + ".pch.rsp")
++    ctx.actions.write(source, '#include "%s"\r\n' % ctx.file.header.basename)
++
++    lines = _FREE_X86_COPTS[:]
++    if not any([opt.upper().startswith("/W") and opt.upper() != "/WX" for opt in ctx.attr.copts]):
++        lines.append("/W3")
++    lines.extend(_flavor_copts(ctx) + ctx.attr.copts)
++    lines.extend(["/D%s" % define for define in _FREE_X86_DEFINES + _flavor_defines(ctx) + _variant_defines(ctx, ctx.attr.variant) + ctx.attr.defines])
++    generated_include_paths = [dep[Nt5IncludeInfo].directory.path for dep in ctx.attr.generated_headers]
++    lines.extend(["/I%s" % _quote(path) for path in _source_includes(ctx) + generated_include_paths])
++    lines.extend([
++        "/Yl%s" % ctx.attr.symbol_name,
++        "/Yc%s" % ctx.file.header.basename,
++        "/Fp%s" % _quote(pch.path),
++        "/Fo%s" % _quote(obj.path),
++        "/Tc%s" % _quote(source.path),
++    ])
++    ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++
++    ctx.actions.run(
++        executable = ctx.executable._cl_wrapper,
++        arguments = [ctx.file._cl.dirname, response.path],
++        inputs = depset(
++            direct = [ctx.file.header, source, response] + ctx.files.hdrs,
++            transitive = [ctx.attr._tool_payload[DefaultInfo].files] + [dep[Nt5IncludeInfo].files for dep in ctx.attr.generated_headers],
++        ),
++        outputs = [pch, obj],
++        mnemonic = "Nt5LegacyPch",
++        progress_message = "Creating VC7 precompiled header for %{label}",
++        use_default_shell_env = False,
++    )
++    output_set = depset([pch, obj])
++    return [
++        DefaultInfo(files = output_set),
++        Nt5ObjectsInfo(objects = depset([obj])),
++        Nt5PchInfo(header_name = ctx.file.header.basename, pch = pch, files = output_set),
++    ]
++
++nt5_pch = rule(
++    implementation = _nt5_pch_impl,
++    attrs = {
++        "header": attr.label(allow_single_file = True, mandatory = True),
++        "symbol_name": attr.string(mandatory = True),
++        "hdrs": attr.label_list(allow_files = True),
++        "includes": attr.string_list(),
++        "defines": attr.string_list(),
++        "copts": attr.string_list(),
++        "variant": attr.string(default = "up", values = ["up", "mp", "pae", "paemp"]),
++        "generated_headers": attr.label_list(providers = [Nt5IncludeInfo]),
++        "_cl": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:cl.exe")),
++        "_cl_wrapper": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//bazel/legacy:cl_wrapper.cmd"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def nt5_c_library(name, srcs, hdrs = [], includes = [], defines = [], copts = [], generated_headers = [], extra_object_deps = [], pch_header = None, pch_symbol_name = None, variant = "up", visibility = None):
++    """Compiles C sources and archives them with the original x86 tools."""
++    objects_name = name + "_objects"
++    pch_target = None
++    if pch_header:
++        pch_target = name + "_pch"
++        nt5_pch(
++            name = pch_target,
++            header = pch_header,
++            symbol_name = pch_symbol_name or name,
++            hdrs = hdrs,
++            includes = includes,
++            defines = defines,
++            copts = copts,
++            generated_headers = generated_headers,
++            variant = variant,
++            visibility = ["//visibility:private"],
++        )
++
++    nt5_cl_objects(
++        name = objects_name,
++        srcs = srcs,
++        hdrs = hdrs,
++        includes = includes,
++        defines = defines,
++        copts = copts,
++        generated_headers = generated_headers,
++        variant = variant,
++        pch = (":" + pch_target) if pch_target else None,
++        visibility = ["//visibility:private"],
++    )
++    nt5_static_library(
++        name = name,
++        deps = [":" + objects_name] + ([":" + pch_target] if pch_target else []) + extra_object_deps,
++        visibility = visibility,
++    )
++
++def nt5_mixed_library(name, c_srcs = [], asm_srcs = [], prebuilt_objects = [], extra_object_deps = [], hdrs = [], includes = [], defines = [], copts = [], generated_headers = [], pch_header = None, pch_symbol_name = None, variant = "up", visibility = None):
++    """Builds a legacy archive from C, MASM, and preserved binary objects."""
++    deps = extra_object_deps[:]
++    pch_target = None
++    if pch_header:
++        pch_target = name + "_pch"
++        nt5_pch(
++            name = pch_target,
++            header = pch_header,
++            symbol_name = pch_symbol_name or name,
++            hdrs = hdrs,
++            includes = includes,
++            defines = defines,
++            copts = copts,
++            generated_headers = generated_headers,
++            variant = variant,
++            visibility = ["//visibility:private"],
++        )
++        deps.append(":" + pch_target)
++    if c_srcs:
++        c_name = name + "_c_objects"
++        nt5_cl_objects(
++            name = c_name,
++            srcs = c_srcs,
++            hdrs = hdrs,
++            includes = includes,
++            defines = defines,
++            copts = copts,
++            generated_headers = generated_headers,
++            variant = variant,
++            pch = (":" + pch_target) if pch_target else None,
++            visibility = ["//visibility:private"],
++        )
++        deps.append(":" + c_name)
++    for index, src in enumerate(asm_srcs):
++        asm_name = "%s_asm_%s" % (name, index)
++        nt5_ml_object(
++            name = asm_name,
++            src = src,
++            hdrs = hdrs,
++            includes = includes,
++            defines = defines,
++            generated_headers = generated_headers,
++            variant = variant,
++            visibility = ["//visibility:private"],
++        )
++        deps.append(":" + asm_name)
++    if prebuilt_objects:
++        seed_name = name + "_binary_objects"
++        nt5_prebuilt_objects(
++            name = seed_name,
++            srcs = prebuilt_objects,
++            visibility = ["//visibility:private"],
++        )
++        deps.append(":" + seed_name)
++    nt5_static_library(name = name, deps = deps, visibility = visibility)
++
++# Backward-compatible name used by the initial smoke target.
++def nt5_cl_object(name, src, visibility = None):
++    nt5_cl_objects(
++        name = name,
++        srcs = [src],
++        visibility = visibility,
++    )
++
++def _nt5_genlvl_impl(ctx):
++    output_dir = ctx.actions.declare_directory(ctx.label.name + ".gen")
++    ctx.actions.run(
++        executable = ctx.executable._wrapper,
++        arguments = [ctx.file._genlvl.path, ctx.file.component_table.dirname, output_dir.path],
++        inputs = depset(
++            direct = [ctx.file.component_table],
++            transitive = [ctx.attr._tool_payload[DefaultInfo].files],
++        ),
++        outputs = [output_dir],
++        mnemonic = "Nt5Genlvl",
++        progress_message = "Generating debug-filter sources for %{label}",
++        use_default_shell_env = False,
++    )
++    output_set = depset([output_dir])
++    return [
++        DefaultInfo(files = output_set),
++        Nt5IncludeInfo(directory = output_dir, files = output_set),
++    ]
++
++nt5_genlvl = rule(
++    implementation = _nt5_genlvl_impl,
++    attrs = {
++        "component_table": attr.label(allow_single_file = True, mandatory = True),
++        "_genlvl": attr.label(
++            allow_single_file = True,
++            default = Label("//Source/XPSP1/NT/tools/x86:genlvl.exe"),
++        ),
++        "_wrapper": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//bazel/legacy:genlvl_wrapper.cmd"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_generr_impl(ctx):
++    objects = ctx.attr.object[Nt5ObjectsInfo].objects.to_list()
++    if len(objects) != 1:
++        fail("nt5_generr requires exactly one generr object")
++    output_dir = ctx.actions.declare_directory(ctx.label.name + ".gen")
++    output_header = output_dir.path + "/error.h"
++    ctx.actions.run(
++        executable = ctx.executable._generr,
++        arguments = [objects[0].path, output_header],
++        inputs = depset(
++            transitive = [ctx.attr.object[Nt5ObjectsInfo].objects, ctx.attr._tool_payload[DefaultInfo].files],
++        ),
++        outputs = [output_dir],
++        mnemonic = "Nt5Generr",
++        progress_message = "Generating NTSTATUS translation table for %{label}",
++        use_default_shell_env = False,
++    )
++    output_set = depset([output_dir])
++    return [DefaultInfo(files = output_set), Nt5IncludeInfo(directory = output_dir, files = output_set)]
++
++nt5_generr = rule(
++    implementation = _nt5_generr_impl,
++    attrs = {
++        "object": attr.label(mandatory = True, providers = [Nt5ObjectsInfo]),
++        "_generr": attr.label(
++            allow_single_file = True,
++            cfg = "exec",
++            default = Label("//Source/XPSP1/NT/tools/x86:generr.exe"),
++            executable = True,
++        ),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_def_file_impl(ctx):
++    output = ctx.actions.declare_file(ctx.label.name + ".def")
++    response = ctx.actions.declare_file(ctx.label.name + ".def.rsp")
++    preprocess_input = output.path + ".pp" if ctx.file.append_src else ctx.file.src.path
++    lines = ["/nologo", "/EP", "/Tc%s" % _quote(preprocess_input)]
++    lines.extend(["/D%s" % define for define in _FREE_X86_DEFINES + ctx.attr.defines])
++    lines.extend(["/I%s" % _quote(path) for path in _source_includes(ctx)])
++    ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++    ctx.actions.run(
++        executable = ctx.executable._wrapper,
++        arguments = [ctx.file._cl.dirname, response.path, output.path, ctx.file.src.path, ctx.file.append_src.path if ctx.file.append_src else ""],
++        inputs = depset(direct = [ctx.file.src, response] + ([ctx.file.append_src] if ctx.file.append_src else []) + ctx.files.hdrs, transitive = [ctx.attr._tool_payload[DefaultInfo].files]),
++        outputs = [output],
++        mnemonic = "Nt5LegacyDef",
++        progress_message = "Preprocessing module definition for %{label}",
++        use_default_shell_env = False,
++    )
++    return [DefaultInfo(files = depset([output])), Nt5DefInfo(def_file = output)]
++
++nt5_def_file = rule(
++    implementation = _nt5_def_file_impl,
++    attrs = {
++        "src": attr.label(allow_single_file = [".src", ".def"], mandatory = True),
++        "append_src": attr.label(allow_single_file = [".src"]),
++        "hdrs": attr.label_list(allow_files = True),
++        "includes": attr.string_list(),
++        "defines": attr.string_list(),
++        "_cl": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:cl.exe")),
++        "_wrapper": attr.label(allow_single_file = True, cfg = "exec", default = Label("//bazel/legacy:preprocess_wrapper.cmd"), executable = True),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_raw_def_file_impl(ctx):
++    output = ctx.actions.declare_file(ctx.label.name + ".def")
++    ctx.actions.expand_template(
++        template = ctx.file.src,
++        output = output,
++        substitutions = {},
++    )
++    return [DefaultInfo(files = depset([output])), Nt5DefInfo(def_file = output)]
++
++nt5_raw_def_file = rule(
++    implementation = _nt5_raw_def_file_impl,
++    attrs = {"src": attr.label(allow_single_file = [".def"], mandatory = True)},
++)
++
++def _nt5_import_library_impl(ctx):
++    library = ctx.actions.declare_file(ctx.label.name + ".lib")
++    exp = ctx.actions.declare_file(ctx.label.name + ".exp")
++    response = ctx.actions.declare_file(ctx.label.name + ".implib.rsp")
++    lines = [
++        "/nologo", "/machine:ix86", "/nodefaultlib", "/WX", "/ignore:4087,4001",
++        "/def:%s" % _quote(ctx.attr.definition[Nt5DefInfo].def_file.path),
++        "/out:%s" % _quote(library.path),
++    ]
++    resolution_libraries = []
++    for dep in ctx.attr.resolution_libraries:
++        matches = [f for f in dep[DefaultInfo].files.to_list() if f.basename.lower().endswith(".lib")]
++        if len(matches) != 1:
++            fail("each import-library resolution dependency must expose one .lib: %s" % dep.label)
++        resolution_libraries.append(matches[0])
++    lines.extend([_quote(f.path) for f in resolution_libraries])
++    ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++    ctx.actions.run(
++        executable = ctx.executable._lib_wrapper,
++        arguments = [ctx.file._lib.dirname, response.path],
++        inputs = depset(direct = [ctx.attr.definition[Nt5DefInfo].def_file, response] + resolution_libraries, transitive = [ctx.attr._tool_payload[DefaultInfo].files]),
++        outputs = [library, exp],
++        mnemonic = "Nt5LegacyImportLib",
++        progress_message = "Creating import library for %{label}",
++        use_default_shell_env = False,
++    )
++    return [DefaultInfo(files = depset([library, exp])), Nt5ImportInfo(exp = exp, library = library)]
++
++nt5_import_library = rule(
++    implementation = _nt5_import_library_impl,
++    attrs = {
++        "definition": attr.label(mandatory = True, providers = [Nt5DefInfo]),
++        "resolution_libraries": attr.label_list(allow_files = [".lib"]),
++        "_lib": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:lib.exe")),
++        "_lib_wrapper": attr.label(allow_single_file = True, cfg = "exec", default = Label("//bazel/legacy:lib_wrapper.cmd"), executable = True),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_kernel_image_impl(ctx):
++    image = ctx.actions.declare_file(ctx.attr.image_name)
++    pdb = ctx.actions.declare_file(ctx.attr.image_name.rsplit(".", 1)[0] + ".pdb")
++    map_file = ctx.actions.declare_file(ctx.attr.image_name.rsplit(".", 1)[0] + ".map")
++    response = ctx.actions.declare_file(ctx.label.name + ".link.rsp")
++    library_files = []
++    for dep in ctx.attr.libraries:
++        matches = [f for f in dep[DefaultInfo].files.to_list() if f.basename.lower().endswith(".lib")]
++        if len(matches) != 1:
++            fail("each kernel library dependency must expose exactly one .lib: %s" % dep.label)
++        library_files.append(matches[0])
++    exp = ctx.attr.exports[Nt5ImportInfo].exp
++    resource_files = []
++    for dep in ctx.attr.resources:
++        resource_files.extend([f for f in dep[DefaultInfo].files.to_list() if f.basename.lower().endswith(".res")])
++    object_files = depset(transitive = [dep[Nt5ObjectsInfo].objects for dep in ctx.attr.objects]).to_list()
++    lines = [
++        "/nologo", "/WX", "/nodefaultlib", "/incremental:no", "/fullbuild", "/release",
++        "/opt:ref", "/opt:icf", "/debug:full", "/debugtype:cv,fixup",
++        "/ignore:4010,4037,4039,4065,4070,4078,4087,4089,4198,4221,4001",
++        "/merge:_PAGE=PAGE", "/merge:_TEXT=.text", "/merge:.rdata=.text", "/merge:PAGECONST=PAGE",
++        "/merge:INITCONST=INIT", "/merge:INITDATA=INIT", "/merge:PAGELKCONST=PAGELK",
++        "/merge:PAGEVRFY_CONST=PAGEVRFY", "/section:INIT,d",
++        "/version:5.1", "/osversion:5.1", "/subsystem:native,5.1", "/driver",
++        "/entry:KiSystemStartup@4", "/align:%s" % ("0x1000" if _is_checked(ctx) else ctx.attr.alignment), "/machine:ix86",
++        "/out:%s" % _quote(image.path), "/pdb:%s" % _quote(pdb.path), "/map:%s" % _quote(map_file.path),
++    ]
++    if ctx.attr.large_address_aware:
++        lines.append("/largeaddressaware")
++    # Seed archive extraction with the complete export object. The legacy
++    # graph also had a tiny generated ntoskrnl.obj ahead of KERNEL_LIBS; the
++    # EXP contains the authoritative root set needed by a one-pass VC7 link.
++    lines.extend([_quote(f.path) for f in resource_files])
++    lines.extend([_quote(f.path) for f in object_files])
++    lines.append(_quote(exp.path))
++    lines.extend([_quote(f.path) for f in library_files])
++    ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++    ctx.actions.run(
++        executable = ctx.executable._wrapper,
++        arguments = [ctx.file._link.dirname, response.path, image.path],
++        inputs = depset(direct = [response, exp] + resource_files + object_files + library_files, transitive = [ctx.attr._tool_payload[DefaultInfo].files]),
++        outputs = [image, pdb, map_file],
++        mnemonic = "Nt5KernelLink",
++        progress_message = "Linking NT 5 kernel image %{label}",
++        use_default_shell_env = False,
++    )
++    return [DefaultInfo(files = depset([image, pdb, map_file]))]
++
++nt5_kernel_image = rule(
++    implementation = _nt5_kernel_image_impl,
++    attrs = {
++        "image_name": attr.string(mandatory = True),
++        "libraries": attr.label_list(mandatory = True, allow_files = [".lib"]),
++        "exports": attr.label(mandatory = True, providers = [Nt5ImportInfo]),
++        "resources": attr.label_list(),
++        "objects": attr.label_list(providers = [Nt5ObjectsInfo]),
++        "alignment": attr.string(default = "0x80"),
++        "large_address_aware": attr.bool(default = False),
++        "_link": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:link.exe")),
++        "_wrapper": attr.label(allow_single_file = True, cfg = "exec", default = Label("//bazel/legacy:kernel_link_wrapper.cmd"), executable = True),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
++
++def _nt5_native_dll_impl(ctx):
++    image = ctx.actions.declare_file(ctx.attr.image_name)
++    stem = ctx.attr.image_name.rsplit(".", 1)[0]
++    pdb = ctx.actions.declare_file(stem + ".pdb")
++    map_file = ctx.actions.declare_file(stem + ".map")
++    response = ctx.actions.declare_file(ctx.label.name + ".link.rsp")
++    libraries = []
++    for dep in ctx.attr.libraries:
++        matches = [f for f in dep[DefaultInfo].files.to_list() if f.basename.lower().endswith(".lib")]
++        if len(matches) != 1:
++            fail("each native DLL dependency must expose exactly one .lib: %s" % dep.label)
++        libraries.append(matches[0])
++    resources = []
++    for dep in ctx.attr.resources:
++        resources.extend([f for f in dep[DefaultInfo].files.to_list() if f.basename.lower().endswith(".res")])
++    exp = ctx.attr.exports[Nt5ImportInfo].exp
++    lines = [
++        "/nologo", "/WX", "/nodefaultlib", "/incremental:no", "/fullbuild", "/release",
++        "/opt:ref", "/opt:icf", "/debug:full", "/debugtype:cv,fixup",
++        "/ignore:4010,4037,4039,4065,4070,4078,4087,4089,4198,4221,4001",
++        "/merge:_PAGE=PAGE", "/merge:_TEXT=.text", "/merge:.rdata=.text",
++        "/merge:PAGECONST=PAGE", "/merge:INITCONST=INIT", "/section:INIT,d",
++        "/version:5.1", "/osversion:5.1", "/subsystem:native,5.1", "/driver", "/dll",
++        "/entry:%s" % ctx.attr.entry, "/base:%s" % ctx.attr.image_base,
++        "/align:%s" % ctx.attr.alignment, "/machine:ix86", "/largeaddressaware",
++        "/out:%s" % _quote(image.path), "/pdb:%s" % _quote(pdb.path), "/map:%s" % _quote(map_file.path),
++    ]
++    lines.extend([_quote(f.path) for f in resources])
++    lines.append(_quote(exp.path))
++    lines.extend([_quote(f.path) for f in libraries])
++    ctx.actions.write(response, "\r\n".join(lines) + "\r\n")
++    ctx.actions.run(
++        executable = ctx.executable._wrapper,
++        arguments = [ctx.file._link.dirname, response.path, image.path],
++        inputs = depset(direct = [response, exp] + resources + libraries, transitive = [ctx.attr._tool_payload[DefaultInfo].files]),
++        outputs = [image, pdb, map_file],
++        mnemonic = "Nt5NativeDllLink",
++        progress_message = "Linking NT 5 native DLL %{label}",
++        use_default_shell_env = False,
++    )
++    return [DefaultInfo(files = depset([image, pdb, map_file]))]
++
++nt5_native_dll = rule(
++    implementation = _nt5_native_dll_impl,
++    attrs = {
++        "image_name": attr.string(mandatory = True),
++        "exports": attr.label(mandatory = True, providers = [Nt5ImportInfo]),
++        "libraries": attr.label_list(mandatory = True, allow_files = [".lib"]),
++        "resources": attr.label_list(),
++        "entry": attr.string(default = "HalInitSystem@8"),
++        "image_base": attr.string(default = "0x80010000"),
++        "alignment": attr.string(default = "0x80"),
++        "_link": attr.label(allow_single_file = True, default = Label("//Source/XPSP1/NT/tools/x86:link.exe")),
++        "_wrapper": attr.label(allow_single_file = True, cfg = "exec", default = Label("//bazel/legacy:kernel_link_wrapper.cmd"), executable = True),
++        "_tool_payload": attr.label(default = Label("//Source/XPSP1/NT/tools/x86:vc7_x86_payload")),
++    },
++)
+diff --git a/bazel/legacy/preprocess_wrapper.cmd b/bazel/legacy/preprocess_wrapper.cmd
+new file mode 100644
+--- /dev/null
++++ b/bazel/legacy/preprocess_wrapper.cmd
+@@ -0,0 +1,18 @@
++@echo off
++setlocal
++set "TOOLDIR=%~1"
++set "RSP=%~2"
++set "OUTPUT=%~3"
++set "PRIMARY=%~4"
++set "APPEND=%~5"
++set "OUTPUT=%OUTPUT:/=\%"
++set "PRIMARY=%PRIMARY:/=\%"
++set "APPEND=%APPEND:/=\%"
++set "PATH=%TOOLDIR%;%PATH%"
++if not "%APPEND%"=="" (
++  copy /b "%PRIMARY%"+"%APPEND%" "%OUTPUT%.pp" >nul || exit /b 1
++)
++"%TOOLDIR%\cl.exe" @"%RSP%" > "%OUTPUT%"
++set "RC=%ERRORLEVEL%"
++if exist "%OUTPUT%.pp" del "%OUTPUT%.pp"
++exit /b %RC%
+diff --git a/bazel/manifests/BUILD.bazel b/bazel/manifests/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/bazel/manifests/BUILD.bazel
+@@ -0,0 +1,9 @@
++exports_files([
++    "ntos_up_c_libraries.bzl",
++    "ntos_x86fre.json",
++    "halacpi_pic_x86fre.bzl",
++    "halacpi_apic_x86fre.bzl",
++    "halacpi_mpapic_x86fre.bzl",
++])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/bazel/manifests/halacpi_apic_x86fre.bzl b/bazel/manifests/halacpi_apic_x86fre.bzl
+new file mode 100644
+--- /dev/null
++++ b/bazel/manifests/halacpi_apic_x86fre.bzl
+@@ -0,0 +1,76 @@
++# Generated from the legacy free-x86 _objects.mac. Do not hand edit.
++HALACPI_PIC_C_SRCS = [
++    "//Source/XPSP1/NT/base/hals:halacpi/acpidtct.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/chiphacks.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/cmosopregion.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/drivesup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/dynsysres.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixenvirv.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixfirm.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixhalt.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixhwsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixinfo.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixisabus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixisasup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixmca.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixnmi.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpcibus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpciint.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixphwsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpnpdrv.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixreboot.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixslpsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixthunk.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixusage.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mmtimer.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpprocst.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmbus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmdata.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmisabus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmpcisup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmsleep.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/sratnuma.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxacpi.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxbiosc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxdisp.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxmemory.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxstubs.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxtime.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxtimer.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpclockc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpdebug.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpdat.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mphal.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpinfo.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsproc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsys.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsysbus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsyssup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmapic.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmtimerc.c",
++]
++
++HALACPI_PIC_ASM_SRCS = [
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixbeep.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixcmos.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixidle.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixmcaa.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixmovnti.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixslpctx.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixsstate.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpclock.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpconfig.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpipi.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpirql.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpprofil.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpspin.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpsproca.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpswint.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpsysint.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmrtc.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmstall.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmtimer.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/xxbiosa.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/xxioacc.asm",
++]
++
+diff --git a/bazel/manifests/halacpi_mpapic_x86fre.bzl b/bazel/manifests/halacpi_mpapic_x86fre.bzl
+new file mode 100644
+--- /dev/null
++++ b/bazel/manifests/halacpi_mpapic_x86fre.bzl
+@@ -0,0 +1,76 @@
++# Generated from the legacy free-x86 _objects.mac. Do not hand edit.
++HALACPI_PIC_C_SRCS = [
++    "//Source/XPSP1/NT/base/hals:halacpi/acpidtct.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/chiphacks.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/cmosopregion.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/drivesup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/dynsysres.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixenvirv.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixfirm.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixhalt.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixhwsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixinfo.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixisabus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixisasup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixmca.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixnmi.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpcibus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpciint.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixphwsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpnpdrv.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixreboot.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixslpsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixthunk.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixusage.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mmtimer.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpprocst.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmbus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmdata.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmisabus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmpcisup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmsleep.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/sratnuma.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxacpi.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxbiosc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxdisp.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxmemory.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxstubs.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxtime.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxtimer.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpclockc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpdat.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpdebug.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mphal.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpinfo.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsproc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsys.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsysbus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpsyssup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmapic.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmtimerc.c",
++]
++
++HALACPI_PIC_ASM_SRCS = [
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixbeep.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixcmos.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixidle.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixmcaa.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixmovnti.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixslpctx.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixsstate.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpconfig.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpclksup.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpclock.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpipi.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpirql.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpprofil.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpspin.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpsproca.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpswint.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mpsysint.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmrtc.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmtimer.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/xxbiosa.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/xxioacc.asm",
++]
++
+diff --git a/bazel/manifests/halacpi_pic_x86fre.bzl b/bazel/manifests/halacpi_pic_x86fre.bzl
+new file mode 100644
+--- /dev/null
++++ b/bazel/manifests/halacpi_pic_x86fre.bzl
+@@ -0,0 +1,68 @@
++# Generated from the legacy free-x86 _objects.mac. Do not hand edit.
++HALACPI_PIC_C_SRCS = [
++    "//Source/XPSP1/NT/base/hals:halacpi/acpidtct.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/chiphacks.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/cmosopregion.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/drivesup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/dynsysres.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixenvirv.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixfirm.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixhalt.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixhwsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixinfo.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixisabus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixisasup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixmca.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixnmi.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpcibus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpciint.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixphwsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixpnpdrv.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixreboot.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixslpsup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixthunk.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixusage.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mmtimer.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/mpprocst.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmbus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmdata.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmisabus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmpcisup.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmsleep.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/sratnuma.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxacpi.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxbiosc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxdisp.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxmemory.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxstubs.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxtime.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxtimer.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixdat.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixproc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/ixsysbus.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmpic.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/pmtimerc.c",
++    "//Source/XPSP1/NT/base/hals:halacpi/xxhal.c",
++]
++
++HALACPI_PIC_ASM_SRCS = [
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixbeep.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixclock.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixcmos.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixidle.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixipi.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixmcaa.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixmovnti.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixprofil.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixslpctx.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixsstate.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/ixswint.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mcirql.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/mcsysint.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmrtc.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmstall.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/pmtimer.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/xxbiosa.asm",
++    "//Source/XPSP1/NT/base/hals:halacpi/i386/xxioacc.asm",
++]
++
+diff --git a/bazel/manifests/ntos_up_c_libraries.bzl b/bazel/manifests/ntos_up_c_libraries.bzl
+new file mode 100644
+--- /dev/null
++++ b/bazel/manifests/ntos_up_c_libraries.bzl
+@@ -0,0 +1,934 @@
++"""Generated from ntos_x86fre.json. Regenerate with generate_ntos_bzl.ps1."""
++
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library", "nt5_mixed_library")
++
++def declare_ntos_up_c_libraries(common_headers, common_includes, kernel_defines, generated_headers):
++    nt5_c_library(
++        name = "cache_up",
++        srcs = [
++            "cache/cachedat.c",
++            "cache/cachesub.c",
++            "cache/copysup.c",
++            "cache/fssup.c",
++            "cache/lazyrite.c",
++            "cache/logsup.c",
++            "cache/mdlsup.c",
++            "cache/pinsup.c",
++            "cache/prefboot.c",
++            "cache/prefetch.c",
++            "cache/prefparm.c",
++            "cache/ccperf.c",
++            "cache/vacbsup.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "cache/cc.h",
++        pch_symbol_name = "cache",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/cache",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "config_up",
++        srcs = [
++            "config/i386/init386.c",
++            "config/i386/initdat.c",
++            "config/i386/geninst.c",
++            "config/i386/parseini.c",
++            "config/i386/rules.c",
++            "config/cmapi.c",
++            "config/cmapi2.c",
++            "config/cmboot.c",
++            "config/cmchek.c",
++            "config/cmchek2.c",
++            "config/cmclose.c",
++            "config/cmconfig.c",
++            "config/cmcontrl.c",
++            "config/cmdat.c",
++            "config/cmdat2.c",
++            "config/cmdat3.c",
++            "config/cmdatini.c",
++            "config/cmdelete.c",
++            "config/cmgquota.c",
++            "config/cmhvlist.c",
++            "config/cmindex.c",
++            "config/cminit.c",
++            "config/cmname.c",
++            "config/cmnotify.c",
++            "config/cmparse.c",
++            "config/cmparse2.c",
++            "config/cmquery.c",
++            "config/cmsavres.c",
++            "config/cmsubs.c",
++            "config/cmsubs2.c",
++            "config/cmsubs3.c",
++            "config/cmse.c",
++            "config/cmsysini.c",
++            "config/cmtrecpy.c",
++            "config/cmtredel.c",
++            "config/cmtree.c",
++            "config/cmworker.c",
++            "config/cmwrapr.c",
++            "config/cmwrapr2.c",
++            "config/cmwmi.c",
++            "config/cmmapvw.c",
++            "config/cmdelay.c",
++            "config/cmvalue.c",
++            "config/cmsecache.c",
++            "config/cmdown.c",
++            "config/cmalloc.c",
++            "config/cmhook.c",
++            "config/hivebin.c",
++            "config/hivecell.c",
++            "config/hivechek.c",
++            "config/hivefree.c",
++            "config/hiveinit.c",
++            "config/hiveload.c",
++            "config/hivemap.c",
++            "config/hivesum.c",
++            "config/hivesync.c",
++            "config/hivehint.c",
++            "config/ntapi.c",
++            "config/hwprofil.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "config/cmp.h",
++        pch_symbol_name = "config",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/config",
++            "Source/XPSP1/NT/base/ntos/config/i386",
++        ],
++        defines = kernel_defines + ["_WANT_MACHINE_IDENTIFICATION"],
++    )
++
++    nt5_c_library(
++        name = "fsrtl_up",
++        srcs = [
++            "fsrtl/dbcsname.c",
++            "fsrtl/fastio.c",
++            "fsrtl/faulttol.c",
++            "fsrtl/filelock.c",
++            "fsrtl/filter.c",
++            "fsrtl/filtrctx.c",
++            "fsrtl/fsfilter.c",
++            "fsrtl/fsrtlpc.c",
++            "fsrtl/largemcb.c",
++            "fsrtl/name.c",
++            "fsrtl/notify.c",
++            "fsrtl/oplock.c",
++            "fsrtl/pnp.c",
++            "fsrtl/unc.c",
++            "fsrtl/tunnel.c",
++            "fsrtl/stackovf.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "fsrtl/fsrtlp.h",
++        pch_symbol_name = "FsRtl",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/fsrtl",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "fstub_up",
++        srcs = [
++            "fstub/halfnc.c",
++            "fstub/drivesup.c",
++            "fstub/translate.c",
++            "fstub/ex.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/fstub",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "io_iomgr_up",
++        srcs = [
++            "io/iomgr/arcsec.c",
++            "io/iomgr/cancelapi.c",
++            "io/iomgr/complete.c",
++            "io/iomgr/create.c",
++            "io/iomgr/devctrl.c",
++            "io/iomgr/dev2dos.c",
++            "io/iomgr/dumpctl.c",
++            "io/iomgr/dir.c",
++            "io/iomgr/errorlog.c",
++            "io/iomgr/fsctrl.c",
++            "io/iomgr/internal.c",
++            "io/iomgr/iodata.c",
++            "io/iomgr/ioinit.c",
++            "io/iomgr/iosubs.c",
++            "io/iomgr/ioverifier.c",
++            "io/iomgr/ioperf.c",
++            "io/iomgr/loadunld.c",
++            "io/iomgr/lock.c",
++            "io/iomgr/misc.c",
++            "io/iomgr/objsup.c",
++            "io/iomgr/open.c",
++            "io/iomgr/parse.c",
++            "io/iomgr/qsea.c",
++            "io/iomgr/qsfs.c",
++            "io/iomgr/qsinfo.c",
++            "io/iomgr/qsquota.c",
++            "io/iomgr/query.c",
++            "io/iomgr/read.c",
++            "io/iomgr/triage.c",
++            "io/iomgr/write.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "io/iomgr/iomgr.h",
++        pch_symbol_name = "iomgr",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/io/iomgr",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "io_up",
++        srcs = [
++            "io/ioguid.c",
++            "io/iovutil.c",
++            "io/netboot.c",
++            "io/sessnirp.c",
++            "io/trackirp.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "io/iop.h",
++        pch_symbol_name = "io",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/io",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "kd64_up",
++        srcs = [
++            "kd64/i386/kdtrap.c",
++            "kd64/i386/kdcmsup.c",
++            "kd64/i386/kdcpuapi.c",
++            "kd64/file.c",
++            "kd64/kdinit.c",
++            "kd64/kdbreak.c",
++            "kd64/kdlock.c",
++            "kd64/kdmove.c",
++            "kd64/kddbgio.c",
++            "kd64/kdapi.c",
++            "kd64/kddata.c",
++            "kd64/print.c",
++            "kd64/query.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "kd64/kdp.h",
++        pch_symbol_name = "kd",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/kd64",
++            "Source/XPSP1/NT/base/ntos/kd64/i386",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "mm_up",
++        srcs = [
++            "mm/i386/init386.c",
++            "mm/i386/data386.c",
++            "mm/i386/paesup.c",
++            "mm/i386/setmodfy.c",
++            "mm/acceschk.c",
++            "mm/addrsup.c",
++            "mm/allocpag.c",
++            "mm/allocvm.c",
++            "mm/buildmdl.c",
++            "mm/checkpfn.c",
++            "mm/checkpte.c",
++            "mm/compress.c",
++            "mm/crashdmp.c",
++            "mm/creasect.c",
++            "mm/debugsup.c",
++            "mm/deleteva.c",
++            "mm/dmpaddr.c",
++            "mm/dynmem.c",
++            "mm/extsect.c",
++            "mm/flushbuf.c",
++            "mm/flushsec.c",
++            "mm/forksup.c",
++            "mm/freevm.c",
++            "mm/hypermap.c",
++            "mm/iosup.c",
++            "mm/lockvm.c",
++            "mm/mapcache.c",
++            "mm/mapview.c",
++            "mm/miglobal.c",
++            "mm/mirror.c",
++            "mm/mmfault.c",
++            "mm/mminit.c",
++            "mm/mmsup.c",
++            "mm/mmquota.c",
++            "mm/modwrite.c",
++            "mm/nolowmem.c",
++            "mm/pagfault.c",
++            "mm/pfndec.c",
++            "mm/pfnlist.c",
++            "mm/pfsup.c",
++            "mm/physical.c",
++            "mm/procsup.c",
++            "mm/protect.c",
++            "mm/querysec.c",
++            "mm/queryvm.c",
++            "mm/readwrt.c",
++            "mm/sectsup.c",
++            "mm/session.c",
++            "mm/sessload.c",
++            "mm/shutdown.c",
++            "mm/specpool.c",
++            "mm/sysload.c",
++            "mm/sysptes.c",
++            "mm/triage.c",
++            "mm/umapview.c",
++            "mm/vadtree.c",
++            "mm/verifier.c",
++            "mm/wslist.c",
++            "mm/wsmanage.c",
++            "mm/wstree.c",
++            "mm/wrtfault.c",
++            "mm/wrtwatch.c",
++            "mm/zeropage.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "mm/mi.h",
++        pch_symbol_name = "mm",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/mm",
++            "Source/XPSP1/NT/base/ntos/mm/i386",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "ob_up",
++        srcs = [
++            "ob/obinit.c",
++            "ob/obcreate.c",
++            "ob/obhandle.c",
++            "ob/obinsert.c",
++            "ob/obperf.c",
++            "ob/obref.c",
++            "ob/obse.c",
++            "ob/obtype.c",
++            "ob/obdir.c",
++            "ob/obdevmap.c",
++            "ob/oblink.c",
++            "ob/obclose.c",
++            "ob/obquery.c",
++            "ob/obsdata.c",
++            "ob/obwait.c",
++            "ob/obvutil.c",
++            "ob/fastref.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ob/obp.h",
++        pch_symbol_name = "ob",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ob",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "perf_up",
++        srcs = [
++            "perf/hooks.c",
++            "perf/logging.c",
++            "perf/perfdata.c",
++            "perf/perfsup.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "perf/perfp.h",
++        pch_symbol_name = "perf",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/perf",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "ps_up",
++        srcs = [
++            "ps/i386/psctx386.c",
++            "ps/i386/psldt.c",
++            "ps/i386/psvdm.c",
++            "ps/psspnd.c",
++            "ps/pscid.c",
++            "ps/psimpers.c",
++            "ps/psinit.c",
++            "ps/psdelete.c",
++            "ps/psquery.c",
++            "ps/create.c",
++            "ps/kulookup.c",
++            "ps/psquota.c",
++            "ps/psctx.c",
++            "ps/psopen.c",
++            "ps/psjob.c",
++            "ps/security.c",
++            "ps/pshelper.c",
++            "ps/psenum.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ps/psp.h",
++        pch_symbol_name = "ps",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ps",
++            "Source/XPSP1/NT/base/ntos/ps/i386",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "raw_up",
++        srcs = [
++            "raw/cleanup.c",
++            "raw/close.c",
++            "raw/create.c",
++            "raw/fileinfo.c",
++            "raw/fsctrl.c",
++            "raw/strucsup.c",
++            "raw/rawdisp.c",
++            "raw/rawinit.c",
++            "raw/readwrit.c",
++            "raw/volinfo.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/raw",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "se_up",
++        srcs = [
++            "se/accessck.c",
++            "se/capture.c",
++            "se/privileg.c",
++            "se/rmlogon.c",
++            "se/rmmain.c",
++            "se/rmvars.c",
++            "se/seassign.c",
++            "se/seaudit.c",
++            "se/sepaudit.c",
++            "se/seclient.c",
++            "se/seglobal.c",
++            "se/seinit.c",
++            "se/semethod.c",
++            "se/sep.c",
++            "se/subject.c",
++            "se/seastate.c",
++            "se/token.c",
++            "se/tokenadj.c",
++            "se/tokendup.c",
++            "se/tokenopn.c",
++            "se/tokenqry.c",
++            "se/tokenset.c",
++            "se/adtlog.c",
++            "se/adtinit.c",
++            "se/adtvars.c",
++            "se/adtutil.c",
++            "se/rmaudit.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "se/pch.h",
++        pch_symbol_name = "se",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/se",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "verifier_up",
++        srcs = [
++            "verifier/vfbugcheck.c",
++            "verifier/vfddi.c",
++            "verifier/vfdeadlock.c",
++            "verifier/vfdebug.c",
++            "verifier/vfdevobj.c",
++            "verifier/vfdriver.c",
++            "verifier/vffileio.c",
++            "verifier/vfhal.c",
++            "verifier/vfinit.c",
++            "verifier/vfirp.c",
++            "verifier/vfirpdb.c",
++            "verifier/vfgeneric.c",
++            "verifier/vfmajor.c",
++            "verifier/vfmessage.c",
++            "verifier/vfpacket.c",
++            "verifier/vfpnp.c",
++            "verifier/vfpower.c",
++            "verifier/vfprint.c",
++            "verifier/vfrandom.c",
++            "verifier/vfsettings.c",
++            "verifier/vfstack.c",
++            "verifier/vfutil.c",
++            "verifier/vfwmi.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/verifier",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_c_library(
++        name = "wmi_up",
++        srcs = [
++            "wmi/wmi.c",
++            "wmi/register.c",
++            "wmi/api.c",
++            "wmi/notify.c",
++            "wmi/callouts.c",
++            "wmi/tracelog.c",
++            "wmi/traceapi.c",
++            "wmi/tracesup.c",
++            "wmi/secure.c",
++            "wmi/globalog.c",
++            "wmi/wmidata.c",
++            "wmi/dataprov.c",
++            "wmi/alloc.c",
++            "wmi/chunk.c",
++            "wmi/ds.c",
++            "wmi/consumer.c",
++            "wmi/enabdisa.c",
++            "wmi/smbios.c",
++            "wmi/mca.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/wmi",
++        ],
++        defines = kernel_defines + ["UNICODE"],
++    )
++
++
++def declare_ntos_up_mixed_libraries(common_headers, common_includes, kernel_defines, generated_headers):
++    nt5_mixed_library(
++        name = "ex_up",
++        c_srcs = [
++            "ex/callback.c",
++            "ex/callperf.c",
++            "ex/dbgctrl.c",
++            "ex/delay.c",
++            "ex/event.c",
++            "ex/eventpr.c",
++            "ex/exatom.c",
++            "ex/exdata.c",
++            "ex/exinfo.c",
++            "ex/handle.c",
++            "ex/harderr.c",
++            "ex/hdlsterm.c",
++            "ex/lookasid.c",
++            "ex/luid.c",
++            "ex/mutant.c",
++            "ex/nbqueue.c",
++            "ex/pool.c",
++            "ex/probe.c",
++            "ex/profile.c",
++            "ex/raise.c",
++            "ex/resource.c",
++            "ex/semphore.c",
++            "ex/sysenv.c",
++            "ex/sysinfo.c",
++            "ex/timer.c",
++            "ex/worker.c",
++            "ex/zone.c",
++            "ex/uuid.c",
++            "ex/win32.c",
++            "ex/rundown.c",
++            "ex/pushlock.c",
++            "ex/xipdisp.c",
++            "ex/keyedevent.c",
++        ],
++        asm_srcs = [
++            "ex/i386/fmutex.asm",
++            "ex/i386/intrlock.asm",
++            "ex/i386/intrlfst.asm",
++            "ex/i386/raisests.asm",
++            "ex/i386/splocks.asm",
++        ],
++        prebuilt_objects = [
++            "ex/up/obj/i386/exinit.obj",
++            "ex/up/obj/i386/systime.obj",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ex/exp.h",
++        pch_symbol_name = "ex",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ex",
++            "Source/XPSP1/NT/base/ntos/ex/i386",
++            "Source/XPSP1/NT/base/ntos/ex/up",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_mixed_library(
++        name = "io_pnpmgr_up",
++        c_srcs = [
++            "io/pnpmgr/i386/pbiosc.c",
++            "io/pnpmgr/assign.c",
++            "io/pnpmgr/devices.c",
++            "io/pnpmgr/devnode.c",
++            "io/pnpmgr/devintrf.c",
++            "io/pnpmgr/dockhwp.c",
++            "io/pnpmgr/iofileutil.c",
++            "io/pnpmgr/mapper.c",
++            "io/pnpmgr/notify.c",
++            "io/pnpmgr/pnpbusno.c",
++            "io/pnpmgr/pnpcvrt.c",
++            "io/pnpmgr/pnpdata.c",
++            "io/pnpmgr/pnpdd.c",
++            "io/pnpmgr/pnpdel.c",
++            "io/pnpmgr/pnpdma.c",
++            "io/pnpmgr/pnpeisa.c",
++            "io/pnpmgr/pnpenum.c",
++            "io/pnpmgr/pnpevent.c",
++            "io/pnpmgr/pnpinit.c",
++            "io/pnpmgr/pnpioapi.c",
++            "io/pnpmgr/pnpirp.c",
++            "io/pnpmgr/pnpirq.c",
++            "io/pnpmgr/pnpmap.c",
++            "io/pnpmgr/pnpmemio.c",
++            "io/pnpmgr/pnppower.c",
++            "io/pnpmgr/pnpres.c",
++            "io/pnpmgr/pnprlist.c",
++            "io/pnpmgr/pnpstart.c",
++            "io/pnpmgr/pnpsubs.c",
++            "io/pnpmgr/ppcontrol.c",
++            "io/pnpmgr/pphandle.c",
++            "io/pnpmgr/pphotswap.c",
++            "io/pnpmgr/pplastgood.c",
++            "io/pnpmgr/pppagepath.c",
++            "io/pnpmgr/ppdrvdb.c",
++            "io/pnpmgr/ppprofile.c",
++            "io/pnpmgr/ppvutil.c",
++            "io/pnpmgr/remlock.c",
++            "io/pnpmgr/report.c",
++        ],
++        asm_srcs = [
++            "io/pnpmgr/i386/pbiosa.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "io/pnpmgr/pnpmgrp.h",
++        pch_symbol_name = "pnpmgr",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/io/pnpmgr",
++            "Source/XPSP1/NT/base/ntos/io/pnpmgr/i386",
++            "Source/XPSP1/NT/base/ntos/io/pnpmgr/up",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_mixed_library(
++        name = "ke_up",
++        c_srcs = [
++            "ke/i386/thredini.c",
++            "ke/i386/trapc.c",
++            "ke/i386/vdm.c",
++            "ke/i386/vdmint21.c",
++            "ke/i386/abiosc.c",
++            "ke/i386/allproc.c",
++            "ke/i386/apcuser.c",
++            "ke/i386/biosc.c",
++            "ke/i386/callback.c",
++            "ke/i386/cyrix.c",
++            "ke/i386/exceptn.c",
++            "ke/i386/flush.c",
++            "ke/i386/flushtb.c",
++            "ke/i386/gdtsup.c",
++            "ke/i386/intobj.c",
++            "ke/i386/iopm.c",
++            "ke/i386/i386init.c",
++            "ke/i386/kernlini.c",
++            "ke/i386/largepag.c",
++            "ke/i386/ldtsup.c",
++            "ke/i386/misc.c",
++            "ke/i386/mtrr.c",
++            "ke/i386/mtrramd.c",
++            "ke/i386/pat.c",
++            "ke/apcobj.c",
++            "ke/apcsup.c",
++            "ke/balmgr.c",
++            "ke/bugcheck.c",
++            "ke/config.c",
++            "ke/debug.c",
++            "ke/devquobj.c",
++            "ke/dpcobj.c",
++            "ke/dpcsup.c",
++            "ke/eventobj.c",
++            "ke/interobj.c",
++            "ke/kernldat.c",
++            "ke/kevutil.c",
++            "ke/kiinit.c",
++            "ke/miscc.c",
++            "ke/mutntobj.c",
++            "ke/procobj.c",
++            "ke/profobj.c",
++            "ke/queueobj.c",
++            "ke/raisexcp.c",
++            "ke/semphobj.c",
++            "ke/thredobj.c",
++            "ke/thredsup.c",
++            "ke/timerobj.c",
++            "ke/timersup.c",
++            "ke/wait.c",
++            "ke/waitsup.c",
++            "ke/xipi.c",
++            "ke/yield.c",
++        ],
++        asm_srcs = [
++            "ke/i386/mpipia.asm",
++            "ke/i386/abiosa.asm",
++            "ke/i386/biosa.asm",
++            "ke/i386/callout.asm",
++            "ke/i386/clockint.asm",
++            "ke/i386/ctxswap.asm",
++            "ke/i386/cpu.asm",
++            "ke/i386/emv86.asm",
++            "ke/i386/emxcptn.asm",
++            "ke/i386/int.asm",
++            "ke/i386/intsup.asm",
++            "ke/i386/i386pcr.asm",
++            "ke/i386/instemul.asm",
++            "ke/i386/ldtsup2.asm",
++            "ke/i386/newsysbg.asm",
++            "ke/i386/procstat.asm",
++            "ke/i386/spindbg.asm",
++            "ke/i386/spinlock.asm",
++            "ke/i386/threadbg.asm",
++            "ke/i386/timindex.asm",
++            "ke/i386/trap.asm",
++            "ke/i386/zero.asm",
++        ],
++        extra_object_deps = [":ke_up_services"],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ke/ki.h",
++        pch_symbol_name = "ke",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ke",
++            "Source/XPSP1/NT/base/ntos/ke/i386",
++            "Source/XPSP1/NT/base/ntos/ke/up",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_mixed_library(
++        name = "lpc_up",
++        c_srcs = [
++            "lpc/lpcinit.c",
++            "lpc/lpccreat.c",
++            "lpc/lpclistn.c",
++            "lpc/lpcconn.c",
++            "lpc/lpccompl.c",
++            "lpc/lpcsend.c",
++            "lpc/lpcrecv.c",
++            "lpc/lpcreply.c",
++            "lpc/lpcquery.c",
++            "lpc/lpcqueue.c",
++            "lpc/lpcclose.c",
++            "lpc/lpcpriv.c",
++        ],
++        asm_srcs = [
++            "lpc/i386/lpcmove.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "lpc/lpcp.h",
++        pch_symbol_name = "lpc",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/lpc",
++            "Source/XPSP1/NT/base/ntos/lpc/i386",
++            "Source/XPSP1/NT/base/ntos/lpc/up",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_mixed_library(
++        name = "po_up",
++        c_srcs = [
++            "po/attrib.c",
++            "po/paction.c",
++            "po/pbatt.c",
++            "po/pidle.c",
++            "po/pinfo.c",
++            "po/poinit.c",
++            "po/podata.c",
++            "po/postate.c",
++            "po/pocall.c",
++            "po/poshtdwn.c",
++            "po/pwork.c",
++            "po/switch.c",
++            "po/notify.c",
++            "po/hiber.c",
++            "po/idle.c",
++            "po/misc.c",
++            "po/ntapi.c",
++            "po/sidle.c",
++            "po/suspend.c",
++            "po/sys.c",
++            "po/sysdev.c",
++            "po/thermal.c",
++            "po/throttle.c",
++            "po/volume.c",
++        ],
++        asm_srcs = [
++            "po/i386/xsum.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/po",
++            "Source/XPSP1/NT/base/ntos/po/i386",
++            "Source/XPSP1/NT/base/ntos/po/up",
++        ],
++        defines = kernel_defines,
++    )
++
++    nt5_mixed_library(
++        name = "rtl_up",
++        c_srcs = [
++            "rtl/i386/context.c",
++            "rtl/i386/debug3.c",
++            "rtl/i386/divlarge.c",
++            "rtl/i386/exdsptch.c",
++            "rtl/i386/getcalr.c",
++            "rtl/i386/icecap.c",
++            "rtl/i386/raisests.c",
++            "rtl/acledit.c",
++            "rtl/add2stra.c",
++            "rtl/add2strw.c",
++            "rtl/assert.c",
++            "rtl/atom.c",
++            "rtl/avltable.c",
++            "rtl/bitmap.c",
++            "rtl/bootstatus.c",
++            "rtl/checksum.c",
++            "rtl/cnvint.c",
++            "rtl/compress.c",
++            "rtl/debug.c",
++            "rtl/eballoc.c",
++            "rtl/environ.c",
++            "rtl/error.c",
++            "rtl/excptdbg.c",
++            "rtl/gentable.c",
++            "rtl/gen8dot3.c",
++            "rtl/guid.c",
++            "rtl/heap.c",
++            "rtl/imagedir.c",
++            "rtl/intbits.c",
++            "rtl/ldrrsrc.c",
++            "rtl/ldrreloc.c",
++            "rtl/lznt1.c",
++            "rtl/message.c",
++            "rtl/nls.c",
++            "rtl/nlsxlat.c",
++            "rtl/pctohdr.c",
++            "rtl/peb.c",
++            "rtl/prefix.c",
++            "rtl/prodtype.c",
++            "rtl/random.c",
++            "rtl/range.c",
++            "rtl/regutil.c",
++            "rtl/rtlassig.c",
++            "rtl/rtldata.c",
++            "rtl/rtlexec.c",
++            "rtl/rxact.c",
++            "rtl/sertl.c",
++            "rtl/splay.c",
++            "rtl/str2adda.c",
++            "rtl/str2addw.c",
++            "rtl/string.c",
++            "rtl/stktrace.c",
++            "rtl/sysvol.c",
++            "rtl/time.c",
++            "rtl/tracedb.c",
++            "rtl/version.c",
++            "rtl/xencode.c",
++        ],
++        asm_srcs = [
++            "rtl/i386/byteswap.asm",
++            "rtl/i386/debug2.asm",
++            "rtl/i386/stringsp.asm",
++            "rtl/i386/ioaccess.asm",
++            "rtl/i386/largeint.asm",
++            "rtl/i386/lzntx86.asm",
++            "rtl/i386/movemem.asm",
++            "rtl/i386/raise.asm",
++            "rtl/i386/stkwalk.asm",
++            "rtl/i386/xcptmisc.asm",
++            "rtl/i386/slist.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/rtl",
++            "Source/XPSP1/NT/base/ntos/rtl/i386",
++            "Source/XPSP1/NT/base/ntos/rtl/up",
++        ],
++        defines = kernel_defines + ["NTOS_KERNEL_RUNTIME=1", "USE_RTL_ASSERT2=1"],
++    )
++
++    nt5_mixed_library(
++        name = "vdm_up",
++        c_srcs = [
++            "vdm/i386/vdmentry.c",
++            "vdm/i386/vdminit.c",
++            "vdm/i386/vdmnpx.c",
++            "vdm/i386/vdmfault.c",
++            "vdm/i386/vdmprint.c",
++            "vdm/i386/strtexec.c",
++            "vdm/i386/rdwr.c",
++            "vdm/i386/vdmtrace.c",
++            "vdm/i386/vdmints.c",
++            "vdm/i386/vdmtib.c",
++            "vdm/i386/vdmldt.c",
++            "vdm/i386/vdmuserrefs.c",
++            "vdm/vdm.c",
++        ],
++        asm_srcs = [
++            "vdm/i386/vdmop0f.asm",
++            "vdm/i386/vdmoprnd.asm",
++            "vdm/i386/vdmmisc.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/vdm",
++            "Source/XPSP1/NT/base/ntos/vdm/i386",
++            "Source/XPSP1/NT/base/ntos/vdm/up",
++        ],
++        defines = kernel_defines,
++    )
++
+diff --git a/bazel/manifests/ntos_x86fre_variants.bzl b/bazel/manifests/ntos_x86fre_variants.bzl
+new file mode 100644
+--- /dev/null
++++ b/bazel/manifests/ntos_x86fre_variants.bzl
+@@ -0,0 +1,1395 @@
++"""Generated non-UP NTOS archive declarations."""
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library", "nt5_mixed_library")
++
++def declare_ntos_x86fre_variant_libraries(common_headers, common_includes, kernel_defines, generated_headers):
++    nt5_c_library(
++        name = "cache_mp",
++        srcs = [
++            "cache/cachedat.c",
++            "cache/cachesub.c",
++            "cache/copysup.c",
++            "cache/fssup.c",
++            "cache/lazyrite.c",
++            "cache/logsup.c",
++            "cache/mdlsup.c",
++            "cache/pinsup.c",
++            "cache/prefboot.c",
++            "cache/prefetch.c",
++            "cache/prefparm.c",
++            "cache/ccperf.c",
++            "cache/vacbsup.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "cache/cc.h",
++        pch_symbol_name = "cache",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/cache",
++            "Source/XPSP1/NT/base/ntos/cache/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "config_mp",
++        srcs = [
++            "config/i386/init386.c",
++            "config/i386/initdat.c",
++            "config/i386/geninst.c",
++            "config/i386/parseini.c",
++            "config/i386/rules.c",
++            "config/cmapi.c",
++            "config/cmapi2.c",
++            "config/cmboot.c",
++            "config/cmchek.c",
++            "config/cmchek2.c",
++            "config/cmclose.c",
++            "config/cmconfig.c",
++            "config/cmcontrl.c",
++            "config/cmdat.c",
++            "config/cmdat2.c",
++            "config/cmdat3.c",
++            "config/cmdatini.c",
++            "config/cmdelete.c",
++            "config/cmgquota.c",
++            "config/cmhvlist.c",
++            "config/cmindex.c",
++            "config/cminit.c",
++            "config/cmname.c",
++            "config/cmnotify.c",
++            "config/cmparse.c",
++            "config/cmparse2.c",
++            "config/cmquery.c",
++            "config/cmsavres.c",
++            "config/cmsubs.c",
++            "config/cmsubs2.c",
++            "config/cmsubs3.c",
++            "config/cmse.c",
++            "config/cmsysini.c",
++            "config/cmtrecpy.c",
++            "config/cmtredel.c",
++            "config/cmtree.c",
++            "config/cmworker.c",
++            "config/cmwrapr.c",
++            "config/cmwrapr2.c",
++            "config/cmwmi.c",
++            "config/cmmapvw.c",
++            "config/cmdelay.c",
++            "config/cmvalue.c",
++            "config/cmsecache.c",
++            "config/cmdown.c",
++            "config/cmalloc.c",
++            "config/cmhook.c",
++            "config/hivebin.c",
++            "config/hivecell.c",
++            "config/hivechek.c",
++            "config/hivefree.c",
++            "config/hiveinit.c",
++            "config/hiveload.c",
++            "config/hivemap.c",
++            "config/hivesum.c",
++            "config/hivesync.c",
++            "config/hivehint.c",
++            "config/ntapi.c",
++            "config/hwprofil.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "config/cmp.h",
++        pch_symbol_name = "config",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/config",
++            "Source/XPSP1/NT/base/ntos/config/i386",
++            "Source/XPSP1/NT/base/ntos/config/mp",
++        ],
++        defines = kernel_defines + ["_WANT_MACHINE_IDENTIFICATION"],
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "dbgk_mp",
++        srcs = [
++            "dbgk/dbgkport.c",
++            "dbgk/dbgkproc.c",
++            "dbgk/dbgkobj.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/dbgk",
++            "Source/XPSP1/NT/base/ntos/dbgk/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_mixed_library(
++        name = "ex_mp",
++        c_srcs = [
++            "ex/callback.c",
++            "ex/callperf.c",
++            "ex/dbgctrl.c",
++            "ex/delay.c",
++            "ex/event.c",
++            "ex/eventpr.c",
++            "ex/exatom.c",
++            "ex/exdata.c",
++            "ex/exinfo.c",
++            "ex/handle.c",
++            "ex/harderr.c",
++            "ex/hdlsterm.c",
++            "ex/lookasid.c",
++            "ex/luid.c",
++            "ex/mutant.c",
++            "ex/nbqueue.c",
++            "ex/pool.c",
++            "ex/probe.c",
++            "ex/profile.c",
++            "ex/raise.c",
++            "ex/resource.c",
++            "ex/semphore.c",
++            "ex/sysenv.c",
++            "ex/sysinfo.c",
++            "ex/timer.c",
++            "ex/worker.c",
++            "ex/zone.c",
++            "ex/uuid.c",
++            "ex/win32.c",
++            "ex/rundown.c",
++            "ex/pushlock.c",
++            "ex/xipdisp.c",
++            "ex/keyedevent.c",
++        ],
++        asm_srcs = [
++            "ex/i386/fmutex.asm",
++            "ex/i386/intrlock.asm",
++            "ex/i386/intrlfst.asm",
++            "ex/i386/raisests.asm",
++            "ex/i386/splocks.asm",
++        ],
++        prebuilt_objects = [
++            "ex/mp/obj/i386/exinit.obj",
++            "ex/mp/obj/i386/systime.obj",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ex/exp.h",
++        pch_symbol_name = "ex",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ex",
++            "Source/XPSP1/NT/base/ntos/ex/i386",
++            "Source/XPSP1/NT/base/ntos/ex/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "fsrtl_mp",
++        srcs = [
++            "fsrtl/dbcsname.c",
++            "fsrtl/fastio.c",
++            "fsrtl/faulttol.c",
++            "fsrtl/filelock.c",
++            "fsrtl/filter.c",
++            "fsrtl/filtrctx.c",
++            "fsrtl/fsfilter.c",
++            "fsrtl/fsrtlpc.c",
++            "fsrtl/largemcb.c",
++            "fsrtl/name.c",
++            "fsrtl/notify.c",
++            "fsrtl/oplock.c",
++            "fsrtl/pnp.c",
++            "fsrtl/unc.c",
++            "fsrtl/tunnel.c",
++            "fsrtl/stackovf.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "fsrtl/fsrtlp.h",
++        pch_symbol_name = "FsRtl",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/fsrtl",
++            "Source/XPSP1/NT/base/ntos/fsrtl/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "fstub_mp",
++        srcs = [
++            "fstub/halfnc.c",
++            "fstub/drivesup.c",
++            "fstub/translate.c",
++            "fstub/ex.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/fstub",
++            "Source/XPSP1/NT/base/ntos/fstub/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "io_iomgr_mp",
++        srcs = [
++            "io/iomgr/arcsec.c",
++            "io/iomgr/cancelapi.c",
++            "io/iomgr/complete.c",
++            "io/iomgr/create.c",
++            "io/iomgr/devctrl.c",
++            "io/iomgr/dev2dos.c",
++            "io/iomgr/dumpctl.c",
++            "io/iomgr/dir.c",
++            "io/iomgr/errorlog.c",
++            "io/iomgr/fsctrl.c",
++            "io/iomgr/internal.c",
++            "io/iomgr/iodata.c",
++            "io/iomgr/ioinit.c",
++            "io/iomgr/iosubs.c",
++            "io/iomgr/ioverifier.c",
++            "io/iomgr/ioperf.c",
++            "io/iomgr/loadunld.c",
++            "io/iomgr/lock.c",
++            "io/iomgr/misc.c",
++            "io/iomgr/objsup.c",
++            "io/iomgr/open.c",
++            "io/iomgr/parse.c",
++            "io/iomgr/qsea.c",
++            "io/iomgr/qsfs.c",
++            "io/iomgr/qsinfo.c",
++            "io/iomgr/qsquota.c",
++            "io/iomgr/query.c",
++            "io/iomgr/read.c",
++            "io/iomgr/triage.c",
++            "io/iomgr/write.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "io/iomgr/iomgr.h",
++        pch_symbol_name = "iomgr",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/io/iomgr",
++            "Source/XPSP1/NT/base/ntos/io/iomgr/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "io_mp",
++        srcs = [
++            "io/ioguid.c",
++            "io/iovutil.c",
++            "io/netboot.c",
++            "io/sessnirp.c",
++            "io/trackirp.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "io/iop.h",
++        pch_symbol_name = "io",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/io",
++            "Source/XPSP1/NT/base/ntos/io/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_mixed_library(
++        name = "io_pnpmgr_mp",
++        c_srcs = [
++            "io/pnpmgr/i386/pbiosc.c",
++            "io/pnpmgr/assign.c",
++            "io/pnpmgr/devices.c",
++            "io/pnpmgr/devnode.c",
++            "io/pnpmgr/devintrf.c",
++            "io/pnpmgr/dockhwp.c",
++            "io/pnpmgr/iofileutil.c",
++            "io/pnpmgr/mapper.c",
++            "io/pnpmgr/notify.c",
++            "io/pnpmgr/pnpbusno.c",
++            "io/pnpmgr/pnpcvrt.c",
++            "io/pnpmgr/pnpdata.c",
++            "io/pnpmgr/pnpdd.c",
++            "io/pnpmgr/pnpdel.c",
++            "io/pnpmgr/pnpdma.c",
++            "io/pnpmgr/pnpeisa.c",
++            "io/pnpmgr/pnpenum.c",
++            "io/pnpmgr/pnpevent.c",
++            "io/pnpmgr/pnpinit.c",
++            "io/pnpmgr/pnpioapi.c",
++            "io/pnpmgr/pnpirp.c",
++            "io/pnpmgr/pnpirq.c",
++            "io/pnpmgr/pnpmap.c",
++            "io/pnpmgr/pnpmemio.c",
++            "io/pnpmgr/pnppower.c",
++            "io/pnpmgr/pnpres.c",
++            "io/pnpmgr/pnprlist.c",
++            "io/pnpmgr/pnpstart.c",
++            "io/pnpmgr/pnpsubs.c",
++            "io/pnpmgr/ppcontrol.c",
++            "io/pnpmgr/pphandle.c",
++            "io/pnpmgr/pphotswap.c",
++            "io/pnpmgr/pplastgood.c",
++            "io/pnpmgr/pppagepath.c",
++            "io/pnpmgr/ppdrvdb.c",
++            "io/pnpmgr/ppprofile.c",
++            "io/pnpmgr/ppvutil.c",
++            "io/pnpmgr/remlock.c",
++            "io/pnpmgr/report.c",
++        ],
++        asm_srcs = [
++            "io/pnpmgr/i386/pbiosa.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "io/pnpmgr/pnpmgrp.h",
++        pch_symbol_name = "pnpmgr",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/io/pnpmgr",
++            "Source/XPSP1/NT/base/ntos/io/pnpmgr/i386",
++            "Source/XPSP1/NT/base/ntos/io/pnpmgr/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "kd64_mp",
++        srcs = [
++            "kd64/i386/kdtrap.c",
++            "kd64/i386/kdcmsup.c",
++            "kd64/i386/kdcpuapi.c",
++            "kd64/file.c",
++            "kd64/kdinit.c",
++            "kd64/kdbreak.c",
++            "kd64/kdlock.c",
++            "kd64/kdmove.c",
++            "kd64/kddbgio.c",
++            "kd64/kdapi.c",
++            "kd64/kddata.c",
++            "kd64/print.c",
++            "kd64/query.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "kd64/kdp.h",
++        pch_symbol_name = "kd",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/kd64",
++            "Source/XPSP1/NT/base/ntos/kd64/i386",
++            "Source/XPSP1/NT/base/ntos/kd64/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "kd64_pae",
++        srcs = [
++            "kd64/i386/kdtrap.c",
++            "kd64/i386/kdcmsup.c",
++            "kd64/i386/kdcpuapi.c",
++            "kd64/file.c",
++            "kd64/kdinit.c",
++            "kd64/kdbreak.c",
++            "kd64/kdlock.c",
++            "kd64/kdmove.c",
++            "kd64/kddbgio.c",
++            "kd64/kdapi.c",
++            "kd64/kddata.c",
++            "kd64/print.c",
++            "kd64/query.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "kd64/kdp.h",
++        pch_symbol_name = "kd",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/kd64",
++            "Source/XPSP1/NT/base/ntos/kd64/i386",
++            "Source/XPSP1/NT/base/ntos/kd64/pae",
++        ],
++        defines = kernel_defines,
++        variant = "pae",
++    )
++
++    nt5_c_library(
++        name = "kd64_paemp",
++        srcs = [
++            "kd64/i386/kdtrap.c",
++            "kd64/i386/kdcmsup.c",
++            "kd64/i386/kdcpuapi.c",
++            "kd64/file.c",
++            "kd64/kdinit.c",
++            "kd64/kdbreak.c",
++            "kd64/kdlock.c",
++            "kd64/kdmove.c",
++            "kd64/kddbgio.c",
++            "kd64/kdapi.c",
++            "kd64/kddata.c",
++            "kd64/print.c",
++            "kd64/query.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "kd64/kdp.h",
++        pch_symbol_name = "kd",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/kd64",
++            "Source/XPSP1/NT/base/ntos/kd64/i386",
++            "Source/XPSP1/NT/base/ntos/kd64/paemp",
++        ],
++        defines = kernel_defines,
++        variant = "paemp",
++    )
++
++    nt5_mixed_library(
++        name = "ke_mp",
++        c_srcs = [
++            "ke/i386/thredini.c",
++            "ke/i386/trapc.c",
++            "ke/i386/vdm.c",
++            "ke/i386/vdmint21.c",
++            "ke/i386/abiosc.c",
++            "ke/i386/allproc.c",
++            "ke/i386/apcuser.c",
++            "ke/i386/biosc.c",
++            "ke/i386/callback.c",
++            "ke/i386/cyrix.c",
++            "ke/i386/exceptn.c",
++            "ke/i386/flush.c",
++            "ke/i386/flushtb.c",
++            "ke/i386/gdtsup.c",
++            "ke/i386/intobj.c",
++            "ke/i386/iopm.c",
++            "ke/i386/i386init.c",
++            "ke/i386/kernlini.c",
++            "ke/i386/largepag.c",
++            "ke/i386/ldtsup.c",
++            "ke/i386/misc.c",
++            "ke/i386/mtrr.c",
++            "ke/i386/mtrramd.c",
++            "ke/i386/pat.c",
++            "ke/apcobj.c",
++            "ke/apcsup.c",
++            "ke/balmgr.c",
++            "ke/bugcheck.c",
++            "ke/config.c",
++            "ke/debug.c",
++            "ke/devquobj.c",
++            "ke/dpcobj.c",
++            "ke/dpcsup.c",
++            "ke/eventobj.c",
++            "ke/interobj.c",
++            "ke/kernldat.c",
++            "ke/kevutil.c",
++            "ke/kiinit.c",
++            "ke/miscc.c",
++            "ke/mutntobj.c",
++            "ke/procobj.c",
++            "ke/profobj.c",
++            "ke/queueobj.c",
++            "ke/raisexcp.c",
++            "ke/semphobj.c",
++            "ke/thredobj.c",
++            "ke/thredsup.c",
++            "ke/timerobj.c",
++            "ke/timersup.c",
++            "ke/wait.c",
++            "ke/waitsup.c",
++            "ke/xipi.c",
++            "ke/yield.c",
++        ],
++        asm_srcs = [
++            "ke/i386/mpipia.asm",
++            "ke/i386/abiosa.asm",
++            "ke/i386/biosa.asm",
++            "ke/i386/callout.asm",
++            "ke/i386/clockint.asm",
++            "ke/i386/ctxswap.asm",
++            "ke/i386/cpu.asm",
++            "ke/i386/emv86.asm",
++            "ke/i386/emxcptn.asm",
++            "ke/i386/int.asm",
++            "ke/i386/intsup.asm",
++            "ke/i386/i386pcr.asm",
++            "ke/i386/instemul.asm",
++            "ke/i386/ldtsup2.asm",
++            "ke/i386/newsysbg.asm",
++            "ke/i386/procstat.asm",
++            "ke/i386/spindbg.asm",
++            "ke/i386/spinlock.asm",
++            "ke/i386/threadbg.asm",
++            "ke/i386/timindex.asm",
++            "ke/i386/trap.asm",
++            "ke/i386/zero.asm",
++        ],
++        extra_object_deps = [":ke_mp_services"],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ke/ki.h",
++        pch_symbol_name = "ke",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ke",
++            "Source/XPSP1/NT/base/ntos/ke/i386",
++            "Source/XPSP1/NT/base/ntos/ke/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_mixed_library(
++        name = "ke_pae",
++        c_srcs = [
++            "ke/i386/thredini.c",
++            "ke/i386/trapc.c",
++            "ke/i386/vdm.c",
++            "ke/i386/vdmint21.c",
++            "ke/i386/abiosc.c",
++            "ke/i386/allproc.c",
++            "ke/i386/apcuser.c",
++            "ke/i386/biosc.c",
++            "ke/i386/callback.c",
++            "ke/i386/cyrix.c",
++            "ke/i386/exceptn.c",
++            "ke/i386/flush.c",
++            "ke/i386/flushtb.c",
++            "ke/i386/gdtsup.c",
++            "ke/i386/intobj.c",
++            "ke/i386/iopm.c",
++            "ke/i386/i386init.c",
++            "ke/i386/kernlini.c",
++            "ke/i386/largepag.c",
++            "ke/i386/ldtsup.c",
++            "ke/i386/misc.c",
++            "ke/i386/mtrr.c",
++            "ke/i386/mtrramd.c",
++            "ke/i386/pat.c",
++            "ke/apcobj.c",
++            "ke/apcsup.c",
++            "ke/balmgr.c",
++            "ke/bugcheck.c",
++            "ke/config.c",
++            "ke/debug.c",
++            "ke/devquobj.c",
++            "ke/dpcobj.c",
++            "ke/dpcsup.c",
++            "ke/eventobj.c",
++            "ke/interobj.c",
++            "ke/kernldat.c",
++            "ke/kevutil.c",
++            "ke/kiinit.c",
++            "ke/miscc.c",
++            "ke/mutntobj.c",
++            "ke/procobj.c",
++            "ke/profobj.c",
++            "ke/queueobj.c",
++            "ke/raisexcp.c",
++            "ke/semphobj.c",
++            "ke/thredobj.c",
++            "ke/thredsup.c",
++            "ke/timerobj.c",
++            "ke/timersup.c",
++            "ke/wait.c",
++            "ke/waitsup.c",
++            "ke/xipi.c",
++            "ke/yield.c",
++        ],
++        asm_srcs = [
++            "ke/i386/mpipia.asm",
++            "ke/i386/abiosa.asm",
++            "ke/i386/biosa.asm",
++            "ke/i386/callout.asm",
++            "ke/i386/clockint.asm",
++            "ke/i386/ctxswap.asm",
++            "ke/i386/cpu.asm",
++            "ke/i386/emv86.asm",
++            "ke/i386/emxcptn.asm",
++            "ke/i386/int.asm",
++            "ke/i386/intsup.asm",
++            "ke/i386/i386pcr.asm",
++            "ke/i386/instemul.asm",
++            "ke/i386/ldtsup2.asm",
++            "ke/i386/newsysbg.asm",
++            "ke/i386/procstat.asm",
++            "ke/i386/spindbg.asm",
++            "ke/i386/spinlock.asm",
++            "ke/i386/threadbg.asm",
++            "ke/i386/timindex.asm",
++            "ke/i386/trap.asm",
++            "ke/i386/zero.asm",
++        ],
++        extra_object_deps = [":ke_pae_services"],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ke/ki.h",
++        pch_symbol_name = "ke",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ke",
++            "Source/XPSP1/NT/base/ntos/ke/i386",
++            "Source/XPSP1/NT/base/ntos/ke/pae",
++        ],
++        defines = kernel_defines,
++        variant = "pae",
++    )
++
++    nt5_mixed_library(
++        name = "ke_paemp",
++        c_srcs = [
++            "ke/i386/thredini.c",
++            "ke/i386/trapc.c",
++            "ke/i386/vdm.c",
++            "ke/i386/vdmint21.c",
++            "ke/i386/abiosc.c",
++            "ke/i386/allproc.c",
++            "ke/i386/apcuser.c",
++            "ke/i386/biosc.c",
++            "ke/i386/callback.c",
++            "ke/i386/cyrix.c",
++            "ke/i386/exceptn.c",
++            "ke/i386/flush.c",
++            "ke/i386/flushtb.c",
++            "ke/i386/gdtsup.c",
++            "ke/i386/intobj.c",
++            "ke/i386/iopm.c",
++            "ke/i386/i386init.c",
++            "ke/i386/kernlini.c",
++            "ke/i386/largepag.c",
++            "ke/i386/ldtsup.c",
++            "ke/i386/misc.c",
++            "ke/i386/mtrr.c",
++            "ke/i386/mtrramd.c",
++            "ke/i386/pat.c",
++            "ke/apcobj.c",
++            "ke/apcsup.c",
++            "ke/balmgr.c",
++            "ke/bugcheck.c",
++            "ke/config.c",
++            "ke/debug.c",
++            "ke/devquobj.c",
++            "ke/dpcobj.c",
++            "ke/dpcsup.c",
++            "ke/eventobj.c",
++            "ke/interobj.c",
++            "ke/kernldat.c",
++            "ke/kevutil.c",
++            "ke/kiinit.c",
++            "ke/miscc.c",
++            "ke/mutntobj.c",
++            "ke/procobj.c",
++            "ke/profobj.c",
++            "ke/queueobj.c",
++            "ke/raisexcp.c",
++            "ke/semphobj.c",
++            "ke/thredobj.c",
++            "ke/thredsup.c",
++            "ke/timerobj.c",
++            "ke/timersup.c",
++            "ke/wait.c",
++            "ke/waitsup.c",
++            "ke/xipi.c",
++            "ke/yield.c",
++        ],
++        asm_srcs = [
++            "ke/i386/mpipia.asm",
++            "ke/i386/abiosa.asm",
++            "ke/i386/biosa.asm",
++            "ke/i386/callout.asm",
++            "ke/i386/clockint.asm",
++            "ke/i386/ctxswap.asm",
++            "ke/i386/cpu.asm",
++            "ke/i386/emv86.asm",
++            "ke/i386/emxcptn.asm",
++            "ke/i386/int.asm",
++            "ke/i386/intsup.asm",
++            "ke/i386/i386pcr.asm",
++            "ke/i386/instemul.asm",
++            "ke/i386/ldtsup2.asm",
++            "ke/i386/newsysbg.asm",
++            "ke/i386/procstat.asm",
++            "ke/i386/spindbg.asm",
++            "ke/i386/spinlock.asm",
++            "ke/i386/threadbg.asm",
++            "ke/i386/timindex.asm",
++            "ke/i386/trap.asm",
++            "ke/i386/zero.asm",
++        ],
++        extra_object_deps = [":ke_paemp_services"],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ke/ki.h",
++        pch_symbol_name = "ke",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ke",
++            "Source/XPSP1/NT/base/ntos/ke/i386",
++            "Source/XPSP1/NT/base/ntos/ke/paemp",
++        ],
++        defines = kernel_defines,
++        variant = "paemp",
++    )
++
++    nt5_mixed_library(
++        name = "lpc_mp",
++        c_srcs = [
++            "lpc/lpcinit.c",
++            "lpc/lpccreat.c",
++            "lpc/lpclistn.c",
++            "lpc/lpcconn.c",
++            "lpc/lpccompl.c",
++            "lpc/lpcsend.c",
++            "lpc/lpcrecv.c",
++            "lpc/lpcreply.c",
++            "lpc/lpcquery.c",
++            "lpc/lpcqueue.c",
++            "lpc/lpcclose.c",
++            "lpc/lpcpriv.c",
++        ],
++        asm_srcs = [
++            "lpc/i386/lpcmove.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "lpc/lpcp.h",
++        pch_symbol_name = "lpc",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/lpc",
++            "Source/XPSP1/NT/base/ntos/lpc/i386",
++            "Source/XPSP1/NT/base/ntos/lpc/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "mm_mp",
++        srcs = [
++            "mm/i386/init386.c",
++            "mm/i386/data386.c",
++            "mm/i386/paesup.c",
++            "mm/i386/setmodfy.c",
++            "mm/acceschk.c",
++            "mm/addrsup.c",
++            "mm/allocpag.c",
++            "mm/allocvm.c",
++            "mm/buildmdl.c",
++            "mm/checkpfn.c",
++            "mm/checkpte.c",
++            "mm/compress.c",
++            "mm/crashdmp.c",
++            "mm/creasect.c",
++            "mm/debugsup.c",
++            "mm/deleteva.c",
++            "mm/dmpaddr.c",
++            "mm/dynmem.c",
++            "mm/extsect.c",
++            "mm/flushbuf.c",
++            "mm/flushsec.c",
++            "mm/forksup.c",
++            "mm/freevm.c",
++            "mm/hypermap.c",
++            "mm/iosup.c",
++            "mm/lockvm.c",
++            "mm/mapcache.c",
++            "mm/mapview.c",
++            "mm/miglobal.c",
++            "mm/mirror.c",
++            "mm/mmfault.c",
++            "mm/mminit.c",
++            "mm/mmsup.c",
++            "mm/mmquota.c",
++            "mm/modwrite.c",
++            "mm/nolowmem.c",
++            "mm/pagfault.c",
++            "mm/pfndec.c",
++            "mm/pfnlist.c",
++            "mm/pfsup.c",
++            "mm/physical.c",
++            "mm/procsup.c",
++            "mm/protect.c",
++            "mm/querysec.c",
++            "mm/queryvm.c",
++            "mm/readwrt.c",
++            "mm/sectsup.c",
++            "mm/session.c",
++            "mm/sessload.c",
++            "mm/shutdown.c",
++            "mm/specpool.c",
++            "mm/sysload.c",
++            "mm/sysptes.c",
++            "mm/triage.c",
++            "mm/umapview.c",
++            "mm/vadtree.c",
++            "mm/verifier.c",
++            "mm/wslist.c",
++            "mm/wsmanage.c",
++            "mm/wstree.c",
++            "mm/wrtfault.c",
++            "mm/wrtwatch.c",
++            "mm/zeropage.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "mm/mi.h",
++        pch_symbol_name = "mm",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/mm",
++            "Source/XPSP1/NT/base/ntos/mm/i386",
++            "Source/XPSP1/NT/base/ntos/mm/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "mm_pae",
++        srcs = [
++            "mm/i386/init386.c",
++            "mm/i386/data386.c",
++            "mm/i386/paesup.c",
++            "mm/i386/setmodfy.c",
++            "mm/acceschk.c",
++            "mm/addrsup.c",
++            "mm/allocpag.c",
++            "mm/allocvm.c",
++            "mm/buildmdl.c",
++            "mm/checkpfn.c",
++            "mm/checkpte.c",
++            "mm/compress.c",
++            "mm/crashdmp.c",
++            "mm/creasect.c",
++            "mm/debugsup.c",
++            "mm/deleteva.c",
++            "mm/dmpaddr.c",
++            "mm/dynmem.c",
++            "mm/extsect.c",
++            "mm/flushbuf.c",
++            "mm/flushsec.c",
++            "mm/forksup.c",
++            "mm/freevm.c",
++            "mm/hypermap.c",
++            "mm/iosup.c",
++            "mm/lockvm.c",
++            "mm/mapcache.c",
++            "mm/mapview.c",
++            "mm/miglobal.c",
++            "mm/mirror.c",
++            "mm/mmfault.c",
++            "mm/mminit.c",
++            "mm/mmsup.c",
++            "mm/mmquota.c",
++            "mm/modwrite.c",
++            "mm/nolowmem.c",
++            "mm/pagfault.c",
++            "mm/pfndec.c",
++            "mm/pfnlist.c",
++            "mm/pfsup.c",
++            "mm/physical.c",
++            "mm/procsup.c",
++            "mm/protect.c",
++            "mm/querysec.c",
++            "mm/queryvm.c",
++            "mm/readwrt.c",
++            "mm/sectsup.c",
++            "mm/session.c",
++            "mm/sessload.c",
++            "mm/shutdown.c",
++            "mm/specpool.c",
++            "mm/sysload.c",
++            "mm/sysptes.c",
++            "mm/triage.c",
++            "mm/umapview.c",
++            "mm/vadtree.c",
++            "mm/verifier.c",
++            "mm/wslist.c",
++            "mm/wsmanage.c",
++            "mm/wstree.c",
++            "mm/wrtfault.c",
++            "mm/wrtwatch.c",
++            "mm/zeropage.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "mm/mi.h",
++        pch_symbol_name = "mm",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/mm",
++            "Source/XPSP1/NT/base/ntos/mm/i386",
++            "Source/XPSP1/NT/base/ntos/mm/pae",
++        ],
++        defines = kernel_defines,
++        variant = "pae",
++    )
++
++    nt5_c_library(
++        name = "mm_paemp",
++        srcs = [
++            "mm/i386/init386.c",
++            "mm/i386/data386.c",
++            "mm/i386/paesup.c",
++            "mm/i386/setmodfy.c",
++            "mm/acceschk.c",
++            "mm/addrsup.c",
++            "mm/allocpag.c",
++            "mm/allocvm.c",
++            "mm/buildmdl.c",
++            "mm/checkpfn.c",
++            "mm/checkpte.c",
++            "mm/compress.c",
++            "mm/crashdmp.c",
++            "mm/creasect.c",
++            "mm/debugsup.c",
++            "mm/deleteva.c",
++            "mm/dmpaddr.c",
++            "mm/dynmem.c",
++            "mm/extsect.c",
++            "mm/flushbuf.c",
++            "mm/flushsec.c",
++            "mm/forksup.c",
++            "mm/freevm.c",
++            "mm/hypermap.c",
++            "mm/iosup.c",
++            "mm/lockvm.c",
++            "mm/mapcache.c",
++            "mm/mapview.c",
++            "mm/miglobal.c",
++            "mm/mirror.c",
++            "mm/mmfault.c",
++            "mm/mminit.c",
++            "mm/mmsup.c",
++            "mm/mmquota.c",
++            "mm/modwrite.c",
++            "mm/nolowmem.c",
++            "mm/pagfault.c",
++            "mm/pfndec.c",
++            "mm/pfnlist.c",
++            "mm/pfsup.c",
++            "mm/physical.c",
++            "mm/procsup.c",
++            "mm/protect.c",
++            "mm/querysec.c",
++            "mm/queryvm.c",
++            "mm/readwrt.c",
++            "mm/sectsup.c",
++            "mm/session.c",
++            "mm/sessload.c",
++            "mm/shutdown.c",
++            "mm/specpool.c",
++            "mm/sysload.c",
++            "mm/sysptes.c",
++            "mm/triage.c",
++            "mm/umapview.c",
++            "mm/vadtree.c",
++            "mm/verifier.c",
++            "mm/wslist.c",
++            "mm/wsmanage.c",
++            "mm/wstree.c",
++            "mm/wrtfault.c",
++            "mm/wrtwatch.c",
++            "mm/zeropage.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "mm/mi.h",
++        pch_symbol_name = "mm",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/mm",
++            "Source/XPSP1/NT/base/ntos/mm/i386",
++            "Source/XPSP1/NT/base/ntos/mm/paemp",
++        ],
++        defines = kernel_defines,
++        variant = "paemp",
++    )
++
++    nt5_c_library(
++        name = "ob_mp",
++        srcs = [
++            "ob/obinit.c",
++            "ob/obcreate.c",
++            "ob/obhandle.c",
++            "ob/obinsert.c",
++            "ob/obperf.c",
++            "ob/obref.c",
++            "ob/obse.c",
++            "ob/obtype.c",
++            "ob/obdir.c",
++            "ob/obdevmap.c",
++            "ob/oblink.c",
++            "ob/obclose.c",
++            "ob/obquery.c",
++            "ob/obsdata.c",
++            "ob/obwait.c",
++            "ob/obvutil.c",
++            "ob/fastref.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ob/obp.h",
++        pch_symbol_name = "ob",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ob",
++            "Source/XPSP1/NT/base/ntos/ob/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "perf_mp",
++        srcs = [
++            "perf/hooks.c",
++            "perf/logging.c",
++            "perf/perfdata.c",
++            "perf/perfsup.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "perf/perfp.h",
++        pch_symbol_name = "perf",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/perf",
++            "Source/XPSP1/NT/base/ntos/perf/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_mixed_library(
++        name = "po_mp",
++        c_srcs = [
++            "po/attrib.c",
++            "po/paction.c",
++            "po/pbatt.c",
++            "po/pidle.c",
++            "po/pinfo.c",
++            "po/poinit.c",
++            "po/podata.c",
++            "po/postate.c",
++            "po/pocall.c",
++            "po/poshtdwn.c",
++            "po/pwork.c",
++            "po/switch.c",
++            "po/notify.c",
++            "po/hiber.c",
++            "po/idle.c",
++            "po/misc.c",
++            "po/ntapi.c",
++            "po/sidle.c",
++            "po/suspend.c",
++            "po/sys.c",
++            "po/sysdev.c",
++            "po/thermal.c",
++            "po/throttle.c",
++            "po/volume.c",
++        ],
++        asm_srcs = [
++            "po/i386/xsum.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/po",
++            "Source/XPSP1/NT/base/ntos/po/i386",
++            "Source/XPSP1/NT/base/ntos/po/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "ps_mp",
++        srcs = [
++            "ps/i386/psctx386.c",
++            "ps/i386/psldt.c",
++            "ps/i386/psvdm.c",
++            "ps/psspnd.c",
++            "ps/pscid.c",
++            "ps/psimpers.c",
++            "ps/psinit.c",
++            "ps/psdelete.c",
++            "ps/psquery.c",
++            "ps/create.c",
++            "ps/kulookup.c",
++            "ps/psquota.c",
++            "ps/psctx.c",
++            "ps/psopen.c",
++            "ps/psjob.c",
++            "ps/security.c",
++            "ps/pshelper.c",
++            "ps/psenum.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "ps/psp.h",
++        pch_symbol_name = "ps",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/ps",
++            "Source/XPSP1/NT/base/ntos/ps/i386",
++            "Source/XPSP1/NT/base/ntos/ps/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "raw_mp",
++        srcs = [
++            "raw/cleanup.c",
++            "raw/close.c",
++            "raw/create.c",
++            "raw/fileinfo.c",
++            "raw/fsctrl.c",
++            "raw/strucsup.c",
++            "raw/rawdisp.c",
++            "raw/rawinit.c",
++            "raw/readwrit.c",
++            "raw/volinfo.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/raw",
++            "Source/XPSP1/NT/base/ntos/raw/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_mixed_library(
++        name = "rtl_mp",
++        c_srcs = [
++            "rtl/i386/context.c",
++            "rtl/i386/debug3.c",
++            "rtl/i386/divlarge.c",
++            "rtl/i386/exdsptch.c",
++            "rtl/i386/getcalr.c",
++            "rtl/i386/icecap.c",
++            "rtl/i386/raisests.c",
++            "rtl/acledit.c",
++            "rtl/add2stra.c",
++            "rtl/add2strw.c",
++            "rtl/assert.c",
++            "rtl/atom.c",
++            "rtl/avltable.c",
++            "rtl/bitmap.c",
++            "rtl/bootstatus.c",
++            "rtl/checksum.c",
++            "rtl/compress.c",
++            "rtl/cnvint.c",
++            "rtl/debug.c",
++            "rtl/eballoc.c",
++            "rtl/environ.c",
++            "rtl/error.c",
++            "rtl/excptdbg.c",
++            "rtl/gentable.c",
++            "rtl/gen8dot3.c",
++            "rtl/guid.c",
++            "rtl/heap.c",
++            "rtl/imagedir.c",
++            "rtl/intbits.c",
++            "rtl/ldrrsrc.c",
++            "rtl/ldrreloc.c",
++            "rtl/lznt1.c",
++            "rtl/message.c",
++            "rtl/nls.c",
++            "rtl/nlsxlat.c",
++            "rtl/pctohdr.c",
++            "rtl/peb.c",
++            "rtl/prefix.c",
++            "rtl/prodtype.c",
++            "rtl/random.c",
++            "rtl/range.c",
++            "rtl/regutil.c",
++            "rtl/rtlassig.c",
++            "rtl/rtldata.c",
++            "rtl/rtlexec.c",
++            "rtl/rxact.c",
++            "rtl/sertl.c",
++            "rtl/splay.c",
++            "rtl/str2adda.c",
++            "rtl/str2addw.c",
++            "rtl/string.c",
++            "rtl/stktrace.c",
++            "rtl/sysvol.c",
++            "rtl/time.c",
++            "rtl/tracedb.c",
++            "rtl/version.c",
++            "rtl/xencode.c",
++        ],
++        asm_srcs = [
++            "rtl/i386/byteswap.asm",
++            "rtl/i386/debug2.asm",
++            "rtl/i386/stringsp.asm",
++            "rtl/i386/ioaccess.asm",
++            "rtl/i386/largeint.asm",
++            "rtl/i386/lzntx86.asm",
++            "rtl/i386/movemem.asm",
++            "rtl/i386/raise.asm",
++            "rtl/i386/stkwalk.asm",
++            "rtl/i386/xcptmisc.asm",
++            "rtl/i386/slist.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/rtl",
++            "Source/XPSP1/NT/base/ntos/rtl/i386",
++            "Source/XPSP1/NT/base/ntos/rtl/mp",
++        ],
++        defines = kernel_defines + ["NTOS_KERNEL_RUNTIME=1", "USE_RTL_ASSERT2=1"],
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "se_mp",
++        srcs = [
++            "se/accessck.c",
++            "se/capture.c",
++            "se/privileg.c",
++            "se/rmlogon.c",
++            "se/rmmain.c",
++            "se/rmvars.c",
++            "se/seassign.c",
++            "se/seaudit.c",
++            "se/sepaudit.c",
++            "se/seclient.c",
++            "se/seglobal.c",
++            "se/seinit.c",
++            "se/semethod.c",
++            "se/sep.c",
++            "se/subject.c",
++            "se/seastate.c",
++            "se/token.c",
++            "se/tokenadj.c",
++            "se/tokendup.c",
++            "se/tokenopn.c",
++            "se/tokenqry.c",
++            "se/tokenset.c",
++            "se/adtlog.c",
++            "se/adtinit.c",
++            "se/adtvars.c",
++            "se/adtutil.c",
++            "se/rmaudit.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        pch_header = "se/pch.h",
++        pch_symbol_name = "se",
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/se",
++            "Source/XPSP1/NT/base/ntos/se/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_mixed_library(
++        name = "vdm_mp",
++        c_srcs = [
++            "vdm/i386/vdmentry.c",
++            "vdm/i386/vdminit.c",
++            "vdm/i386/vdmnpx.c",
++            "vdm/i386/vdmfault.c",
++            "vdm/i386/vdmprint.c",
++            "vdm/i386/strtexec.c",
++            "vdm/i386/rdwr.c",
++            "vdm/i386/vdmtrace.c",
++            "vdm/i386/vdmints.c",
++            "vdm/i386/vdmtib.c",
++            "vdm/i386/vdmldt.c",
++            "vdm/i386/vdmuserrefs.c",
++            "vdm/vdm.c",
++        ],
++        asm_srcs = [
++            "vdm/i386/vdmop0f.asm",
++            "vdm/i386/vdmoprnd.asm",
++            "vdm/i386/vdmmisc.asm",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/vdm",
++            "Source/XPSP1/NT/base/ntos/vdm/i386",
++            "Source/XPSP1/NT/base/ntos/vdm/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "verifier_mp",
++        srcs = [
++            "verifier/vfbugcheck.c",
++            "verifier/vfddi.c",
++            "verifier/vfdeadlock.c",
++            "verifier/vfdebug.c",
++            "verifier/vfdevobj.c",
++            "verifier/vfdriver.c",
++            "verifier/vffileio.c",
++            "verifier/vfhal.c",
++            "verifier/vfinit.c",
++            "verifier/vfirp.c",
++            "verifier/vfirpdb.c",
++            "verifier/vfgeneric.c",
++            "verifier/vfmajor.c",
++            "verifier/vfmessage.c",
++            "verifier/vfpacket.c",
++            "verifier/vfpnp.c",
++            "verifier/vfpower.c",
++            "verifier/vfprint.c",
++            "verifier/vfrandom.c",
++            "verifier/vfsettings.c",
++            "verifier/vfstack.c",
++            "verifier/vfutil.c",
++            "verifier/vfwmi.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/verifier",
++            "Source/XPSP1/NT/base/ntos/verifier/mp",
++        ],
++        defines = kernel_defines,
++        variant = "mp",
++    )
++
++    nt5_c_library(
++        name = "wmi_mp",
++        srcs = [
++            "wmi/wmi.c",
++            "wmi/register.c",
++            "wmi/api.c",
++            "wmi/notify.c",
++            "wmi/callouts.c",
++            "wmi/tracelog.c",
++            "wmi/traceapi.c",
++            "wmi/tracesup.c",
++            "wmi/secure.c",
++            "wmi/globalog.c",
++            "wmi/wmidata.c",
++            "wmi/dataprov.c",
++            "wmi/alloc.c",
++            "wmi/chunk.c",
++            "wmi/ds.c",
++            "wmi/consumer.c",
++            "wmi/enabdisa.c",
++            "wmi/smbios.c",
++            "wmi/mca.c",
++        ],
++        hdrs = common_headers,
++        generated_headers = generated_headers,
++        includes = common_includes + [
++            "Source/XPSP1/NT/base/ntos/wmi",
++            "Source/XPSP1/NT/base/ntos/wmi/mp",
++        ],
++        defines = kernel_defines + ["UNICODE"],
++        variant = "mp",
++    )
++
+diff --git a/Source/XPSP1/NT/base/boot/bootvid/BUILD.bazel b/Source/XPSP1/NT/base/boot/bootvid/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/boot/bootvid/BUILD.bazel
+@@ -0,0 +1,66 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library", "nt5_import_library", "nt5_native_dll", "nt5_raw_def_file", "nt5_rc_resource")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["*.h"]),
++)
++
++_HDRS = [
++    ":headers",
++    "//Source/XPSP1/NT/base/ntos/inc:headers",
++    "//Source/XPSP1/NT/public/ddk/inc:headers",
++    "//Source/XPSP1/NT/public/halkit/inc:headers",
++    "//Source/XPSP1/NT/public/internal/base/inc:headers",
++    "//Source/XPSP1/NT/public/sdk/inc:headers",
++]
++
++_INCLUDES = [
++    "Source/XPSP1/NT/base/boot/bootvid",
++    "Source/XPSP1/NT/base/ntos/inc",
++    "Source/XPSP1/NT/public/ddk/inc",
++    "Source/XPSP1/NT/public/halkit/inc",
++    "Source/XPSP1/NT/public/internal/base/inc",
++    "Source/XPSP1/NT/public/sdk/inc",
++    "Source/XPSP1/NT/public/sdk/inc/crt",
++]
++
++nt5_c_library(
++    name = "bootvid_objects",
++    srcs = ["bootvid.c", "bootdata.c", "vga.c"],
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++)
++
++nt5_raw_def_file(
++    name = "bootvid_def",
++    src = "bootvid.def",
++)
++
++nt5_import_library(
++    name = "bootvid",
++    definition = ":bootvid_def",
++    resolution_libraries = [":bootvid_objects"],
++)
++
++nt5_rc_resource(
++    name = "bootvid_resource",
++    src = "bootvid.rc",
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++)
++
++nt5_native_dll(
++    name = "bootvid_image",
++    image_name = "bootvid.dll",
++    exports = ":bootvid",
++    resources = [":bootvid_resource"],
++    libraries = [
++        ":bootvid_objects",
++        "//Source/XPSP1/NT/base/hals/halacpi/picacpi:hal",
++        "//Source/XPSP1/NT/base/ntos:ntoskrnl_exports",
++    ],
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/boot/kdcom/BUILD.bazel b/Source/XPSP1/NT/base/boot/kdcom/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/boot/kdcom/BUILD.bazel
+@@ -0,0 +1,69 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library", "nt5_import_library", "nt5_native_dll", "nt5_raw_def_file", "nt5_rc_resource")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["*.h"]),
++)
++
++_HDRS = [
++    ":headers",
++    "//Source/XPSP1/NT/base/inc:headers",
++    "//Source/XPSP1/NT/base/ntos/inc:headers",
++    "//Source/XPSP1/NT/public/halkit/inc:headers",
++    "//Source/XPSP1/NT/public/sdk/inc:headers",
++    "//Source/XPSP1/NT/public/internal/sdktools/inc:headers",
++]
++
++_INCLUDES = [
++    "Source/XPSP1/NT/base/boot/kdcom",
++    "Source/XPSP1/NT/base/inc",
++    "Source/XPSP1/NT/base/ntos/inc",
++    "Source/XPSP1/NT/public/halkit/inc",
++    "Source/XPSP1/NT/public/sdk/inc",
++    "Source/XPSP1/NT/public/sdk/inc/crt",
++    "Source/XPSP1/NT/public/internal/sdktools/inc",
++]
++
++nt5_c_library(
++    name = "kdcom_objects",
++    srcs = ["kdcom.c", "kdcomio.c", "ixkdcom.c", "xxkdsup.c"],
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++    defines = ["ACPI_HAL"],
++)
++
++nt5_raw_def_file(
++    name = "kdcom_def",
++    src = "kdcom.def",
++)
++
++nt5_import_library(
++    name = "kdcom",
++    definition = ":kdcom_def",
++    resolution_libraries = [":kdcom_objects"],
++)
++
++nt5_rc_resource(
++    name = "kdcom_resource",
++    src = "kdcom.rc",
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++    defines = ["ACPI_HAL"],
++)
++
++nt5_native_dll(
++    name = "kdcom_image",
++    image_name = "kdcom.dll",
++    exports = ":kdcom",
++    resources = [":kdcom_resource"],
++    libraries = [
++        ":kdcom_objects",
++        "//Source/XPSP1/NT/base/hals/halacpi/picacpi:hal",
++        "//Source/XPSP1/NT/base/ntos:ntoskrnl_exports",
++        "//Source/XPSP1/NT/public/sdk/lib/i386:libcntpr.lib",
++    ],
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/busdrv/isapnp/BUILD.bazel b/Source/XPSP1/NT/base/busdrv/isapnp/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/busdrv/isapnp/BUILD.bazel
+@@ -0,0 +1,9 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_message")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True))
++
++nt5_message(name = "messages", src = "message.mc")
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/busdrv/pci/BUILD.bazel b/Source/XPSP1/NT/base/busdrv/pci/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/busdrv/pci/BUILD.bazel
+@@ -0,0 +1,9 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_message")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True))
++
++nt5_message(name = "pci_codes", src = "pcicodes.mc")
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/fs/fastfat/BUILD.bazel b/Source/XPSP1/NT/base/fs/fastfat/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/fs/fastfat/BUILD.bazel
+@@ -0,0 +1,5 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["*.h", "*.inc"]))
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/hals/BUILD.bazel b/Source/XPSP1/NT/base/hals/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/hals/BUILD.bazel
+@@ -0,0 +1,15 @@
++package(default_visibility = ["//visibility:public"])
++
++exports_files(glob(["**/*.c", "**/*.asm", "**/*.s", "**/*.rc", "**/*.src", "**/*.h", "**/*.inc"]))
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"]),
++)
++
++filegroup(
++    name = "asm_sources",
++    srcs = glob(["**/*.asm", "**/*.s"]),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/hals/halacpi/apic/BUILD.bazel b/Source/XPSP1/NT/base/hals/halacpi/apic/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/hals/halacpi/apic/BUILD.bazel
+@@ -0,0 +1,18 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_def_file", "nt5_import_library", "nt5_mixed_library", "nt5_native_dll", "nt5_rc_resource")
++load("//bazel/manifests:halacpi_apic_x86fre.bzl", "HALACPI_PIC_ASM_SRCS", "HALACPI_PIC_C_SRCS")
++
++package(default_visibility = ["//visibility:public"])
++
++_HDRS = ["//Source/XPSP1/NT/base/hals:headers", "//Source/XPSP1/NT/base/hals:asm_sources", "//Source/XPSP1/NT/base/inc:headers", "//Source/XPSP1/NT/base/ntos/inc:headers", "//Source/XPSP1/NT/base/ntos:private_headers", "//Source/XPSP1/NT/public/ddk/inc:headers", "//Source/XPSP1/NT/public/halkit/inc:headers", "//Source/XPSP1/NT/public/internal/base/inc:headers", "//Source/XPSP1/NT/public/sdk/inc:headers"]
++_INCLUDES = ["Source/XPSP1/NT/base/hals/halacpi/apic", "Source/XPSP1/NT/base/hals/halx86", "Source/XPSP1/NT/base/hals/halx86/i386", "Source/XPSP1/NT/base/hals/halacpi", "Source/XPSP1/NT/base/hals/halacpi/i386", "Source/XPSP1/NT/base/hals/inc", "Source/XPSP1/NT/base/hals", "Source/XPSP1/NT/base/inc", "Source/XPSP1/NT/base/ntos/inc", "Source/XPSP1/NT/base/ntos/ke", "Source/XPSP1/NT/public/ddk/inc", "Source/XPSP1/NT/public/ddk/inc/wdm", "Source/XPSP1/NT/public/halkit/inc", "Source/XPSP1/NT/public/halkit/inc/i386", "Source/XPSP1/NT/public/internal/base/inc", "Source/XPSP1/NT/public/sdk/inc", "Source/XPSP1/NT/public/sdk/inc/crt"]
++_DEFINES = ["APIC_HAL", "ACPI_HAL", "_HALPAE_", "TRACK_SCATTER_GATHER_COUNT", "MMTIMER", "SPEEDY_BOOT"]
++_HALMPS_INCLUDES = ["Source/XPSP1/NT/base/hals/halmps", "Source/XPSP1/NT/base/hals/halmps/i386"]
++_MP_INCLUDES = _INCLUDES[:3] + _HALMPS_INCLUDES + _INCLUDES[3:]
++
++nt5_mixed_library(name = "halaacpi_objects", c_srcs = HALACPI_PIC_C_SRCS, asm_srcs = HALACPI_PIC_ASM_SRCS, hdrs = _HDRS, includes = _MP_INCLUDES, defines = _DEFINES)
++nt5_def_file(name = "hal_def", src = "//Source/XPSP1/NT/base/hals:hal.src", append_src = "empty.src", hdrs = _HDRS, includes = _INCLUDES, defines = _DEFINES + ["i386"])
++nt5_import_library(name = "halaacpi", definition = ":hal_def", resolution_libraries = [":halaacpi_objects"])
++nt5_rc_resource(name = "hal_resource", src = "hal.rc", hdrs = _HDRS, includes = _INCLUDES, defines = _DEFINES)
++nt5_native_dll(name = "halaacpi_image", image_name = "halaacpi.dll", exports = ":halaacpi", resources = [":hal_resource"], libraries = [":halaacpi_objects", "//Source/XPSP1/NT/base/ntos:ntoskrnl_exports", "//Source/XPSP1/NT/base/boot/kdcom:kdcom"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/hals/halacpi/mpapic/BUILD.bazel b/Source/XPSP1/NT/base/hals/halacpi/mpapic/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/hals/halacpi/mpapic/BUILD.bazel
+@@ -0,0 +1,18 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_def_file", "nt5_import_library", "nt5_mixed_library", "nt5_native_dll", "nt5_rc_resource")
++load("//bazel/manifests:halacpi_mpapic_x86fre.bzl", "HALACPI_PIC_ASM_SRCS", "HALACPI_PIC_C_SRCS")
++
++package(default_visibility = ["//visibility:public"])
++
++_HDRS = ["//Source/XPSP1/NT/base/hals:headers", "//Source/XPSP1/NT/base/hals:asm_sources", "//Source/XPSP1/NT/base/inc:headers", "//Source/XPSP1/NT/base/ntos/inc:headers", "//Source/XPSP1/NT/base/ntos:private_headers", "//Source/XPSP1/NT/public/ddk/inc:headers", "//Source/XPSP1/NT/public/halkit/inc:headers", "//Source/XPSP1/NT/public/internal/base/inc:headers", "//Source/XPSP1/NT/public/sdk/inc:headers"]
++_INCLUDES = ["Source/XPSP1/NT/base/hals/halacpi/mpapic", "Source/XPSP1/NT/base/hals/halx86", "Source/XPSP1/NT/base/hals/halx86/i386", "Source/XPSP1/NT/base/hals/halacpi", "Source/XPSP1/NT/base/hals/halacpi/i386", "Source/XPSP1/NT/base/hals/inc", "Source/XPSP1/NT/base/hals", "Source/XPSP1/NT/base/inc", "Source/XPSP1/NT/base/ntos/inc", "Source/XPSP1/NT/base/ntos/ke", "Source/XPSP1/NT/public/ddk/inc", "Source/XPSP1/NT/public/ddk/inc/wdm", "Source/XPSP1/NT/public/halkit/inc", "Source/XPSP1/NT/public/halkit/inc/i386", "Source/XPSP1/NT/public/internal/base/inc", "Source/XPSP1/NT/public/sdk/inc", "Source/XPSP1/NT/public/sdk/inc/crt"]
++_DEFINES = ["APIC_HAL", "ACPI_HAL", "_HALPAE_", "MMTIMER", "SPEEDY_BOOT", "NO_PM_KEQPC"]
++_HALMPS_INCLUDES = ["Source/XPSP1/NT/base/hals/halmps", "Source/XPSP1/NT/base/hals/halmps/i386"]
++_MP_INCLUDES = _INCLUDES[:3] + _HALMPS_INCLUDES + _INCLUDES[3:]
++
++nt5_mixed_library(name = "halmacpi_objects", c_srcs = HALACPI_PIC_C_SRCS, asm_srcs = HALACPI_PIC_ASM_SRCS, hdrs = _HDRS, includes = _MP_INCLUDES, defines = _DEFINES, variant = "mp")
++nt5_def_file(name = "hal_def", src = "//Source/XPSP1/NT/base/hals:hal.src", append_src = "empty.src", hdrs = _HDRS, includes = _INCLUDES, defines = _DEFINES + ["i386"])
++nt5_import_library(name = "halmacpi", definition = ":hal_def", resolution_libraries = [":halmacpi_objects"])
++nt5_rc_resource(name = "hal_resource", src = "hal.rc", hdrs = _HDRS, includes = _INCLUDES, defines = _DEFINES)
++nt5_native_dll(name = "halmacpi_image", image_name = "halmacpi.dll", exports = ":halmacpi", resources = [":hal_resource"], libraries = [":halmacpi_objects", "//Source/XPSP1/NT/base/ntos:ntoskrnl_exports", "//Source/XPSP1/NT/base/boot/kdcom:kdcom"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/hals/halacpi/picacpi/BUILD.bazel b/Source/XPSP1/NT/base/hals/halacpi/picacpi/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/hals/halacpi/picacpi/BUILD.bazel
+@@ -0,0 +1,84 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_def_file", "nt5_import_library", "nt5_mixed_library", "nt5_native_dll", "nt5_rc_resource")
++load("//bazel/manifests:halacpi_pic_x86fre.bzl", "HALACPI_PIC_ASM_SRCS", "HALACPI_PIC_C_SRCS")
++
++package(default_visibility = ["//visibility:public"])
++
++_HDRS = [
++    "//Source/XPSP1/NT/base/hals:headers",
++    "//Source/XPSP1/NT/base/hals:asm_sources",
++    "//Source/XPSP1/NT/base/inc:headers",
++    "//Source/XPSP1/NT/base/ntos/inc:headers",
++    "//Source/XPSP1/NT/base/ntos:private_headers",
++    "//Source/XPSP1/NT/public/ddk/inc:headers",
++    "//Source/XPSP1/NT/public/halkit/inc:headers",
++    "//Source/XPSP1/NT/public/internal/base/inc:headers",
++    "//Source/XPSP1/NT/public/sdk/inc:headers",
++]
++
++_INCLUDES = [
++    "Source/XPSP1/NT/base/hals/halacpi/picacpi",
++    "Source/XPSP1/NT/base/hals/halx86",
++    "Source/XPSP1/NT/base/hals/halx86/i386",
++    "Source/XPSP1/NT/base/hals/halacpi",
++    "Source/XPSP1/NT/base/hals/halacpi/i386",
++    "Source/XPSP1/NT/base/hals/inc",
++    "Source/XPSP1/NT/base/hals",
++    "Source/XPSP1/NT/base/inc",
++    "Source/XPSP1/NT/base/ntos/inc",
++    "Source/XPSP1/NT/base/ntos/ke",
++    "Source/XPSP1/NT/public/ddk/inc",
++    "Source/XPSP1/NT/public/ddk/inc/wdm",
++    "Source/XPSP1/NT/public/halkit/inc",
++    "Source/XPSP1/NT/public/halkit/inc/i386",
++    "Source/XPSP1/NT/public/internal/base/inc",
++    "Source/XPSP1/NT/public/sdk/inc",
++    "Source/XPSP1/NT/public/sdk/inc/crt",
++]
++
++_DEFINES = ["ACPI_HAL", "_HALPAE_", "TRACK_SCATTER_GATHER_COUNT", "MMTIMER", "PICACPI"]
++
++nt5_mixed_library(
++    name = "halacpi_objects",
++    c_srcs = HALACPI_PIC_C_SRCS,
++    asm_srcs = HALACPI_PIC_ASM_SRCS,
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++    defines = _DEFINES,
++)
++
++nt5_def_file(
++    name = "hal_def",
++    src = "//Source/XPSP1/NT/base/hals:hal.src",
++    append_src = "empty.src",
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++    defines = _DEFINES + ["i386"],
++)
++
++nt5_import_library(
++    name = "hal",
++    definition = ":hal_def",
++    resolution_libraries = [":halacpi_objects"],
++)
++
++nt5_rc_resource(
++    name = "hal_resource",
++    src = "hal.rc",
++    hdrs = _HDRS,
++    includes = _INCLUDES,
++    defines = _DEFINES,
++)
++
++nt5_native_dll(
++    name = "halacpi_image",
++    image_name = "halacpi.dll",
++    exports = ":hal",
++    resources = [":hal_resource"],
++    libraries = [
++        ":halacpi_objects",
++        "//Source/XPSP1/NT/base/ntos:ntoskrnl_exports",
++        "//Source/XPSP1/NT/base/boot/kdcom:kdcom",
++    ],
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/inc/BUILD.bazel b/Source/XPSP1/NT/base/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/inc/BUILD.bazel
+@@ -0,0 +1,5 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True))
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/ntos/arb/BUILD.bazel b/Source/XPSP1/NT/base/ntos/arb/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/ntos/arb/BUILD.bazel
+@@ -0,0 +1,76 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "private_headers",
++    srcs = glob(["*.h"]),
++)
++
++nt5_c_library(
++    name = "arbiter",
++    srcs = [
++        "arbiter.c",
++        "debug.c",
++    ],
++    hdrs = [
++        ":private_headers",
++        "//Source/XPSP1/NT/base/ntos/inc:headers",
++        "//Source/XPSP1/NT/public/ddk/inc:headers",
++        "//Source/XPSP1/NT/public/internal/base/inc:headers",
++        "//Source/XPSP1/NT/public/sdk/inc:headers",
++    ],
++    includes = [
++        "Source/XPSP1/NT/base/ntos/arb",
++        "Source/XPSP1/NT/base/ntos/inc",
++        "Source/XPSP1/NT/public/ddk/inc",
++        "Source/XPSP1/NT/public/internal/base/inc",
++        "Source/XPSP1/NT/public/sdk/inc",
++        "Source/XPSP1/NT/public/sdk/inc/crt",
++    ],
++)
++
++nt5_c_library(
++    name = "arbiter_up",
++    srcs = ["arbiter.c", "debug.c"],
++    hdrs = [
++        ":private_headers",
++        "//Source/XPSP1/NT/base/ntos/inc:headers",
++        "//Source/XPSP1/NT/public/ddk/inc:headers",
++        "//Source/XPSP1/NT/public/internal/base/inc:headers",
++        "//Source/XPSP1/NT/public/sdk/inc:headers",
++    ],
++    includes = [
++        "Source/XPSP1/NT/base/ntos/arb",
++        "Source/XPSP1/NT/base/ntos/inc",
++        "Source/XPSP1/NT/public/ddk/inc",
++        "Source/XPSP1/NT/public/internal/base/inc",
++        "Source/XPSP1/NT/public/sdk/inc",
++        "Source/XPSP1/NT/public/sdk/inc/crt",
++    ],
++    defines = ["_NTSYSTEM_", "NT_SMT", "NTOS_KERNEL"],
++)
++
++nt5_c_library(
++    name = "arbiter_mp",
++    srcs = ["arbiter.c", "debug.c"],
++    hdrs = [
++        ":private_headers",
++        "//Source/XPSP1/NT/base/ntos/inc:headers",
++        "//Source/XPSP1/NT/public/ddk/inc:headers",
++        "//Source/XPSP1/NT/public/internal/base/inc:headers",
++        "//Source/XPSP1/NT/public/sdk/inc:headers",
++    ],
++    includes = [
++        "Source/XPSP1/NT/base/ntos/arb",
++        "Source/XPSP1/NT/base/ntos/inc",
++        "Source/XPSP1/NT/public/ddk/inc",
++        "Source/XPSP1/NT/public/internal/base/inc",
++        "Source/XPSP1/NT/public/sdk/inc",
++        "Source/XPSP1/NT/public/sdk/inc/crt",
++    ],
++    defines = ["_NTSYSTEM_", "NT_SMT", "NTOS_KERNEL"],
++    variant = "mp",
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/ntos/BUILD.bazel b/Source/XPSP1/NT/base/ntos/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/ntos/BUILD.bazel
+@@ -0,0 +1,322 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library", "nt5_cl_objects", "nt5_def_file", "nt5_generr", "nt5_import_library", "nt5_ke_services_objects", "nt5_kernel_image", "nt5_rc_resource")
++load("//bazel/manifests:ntos_up_c_libraries.bzl", "declare_ntos_up_c_libraries", "declare_ntos_up_mixed_libraries")
++load("//bazel/manifests:ntos_x86fre_variants.bzl", "declare_ntos_x86fre_variant_libraries")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "private_headers",
++    srcs = glob([
++        "**/*.h",
++        "**/*.inc",
++    ]),
++)
++
++filegroup(
++    name = "init_resource_inputs",
++    srcs = glob(["init/*.bmp", "init/*.rc"]),
++)
++
++_COMMON_HEADERS = [
++    ":private_headers",
++    "//Source/XPSP1/NT/base/ntos/inc:headers",
++    "//Source/XPSP1/NT/public/ddk/inc:headers",
++    "//Source/XPSP1/NT/public/internal/base/inc:headers",
++    "//Source/XPSP1/NT/public/internal/ds/inc:headers",
++    "//Source/XPSP1/NT/public/internal/sdktools/inc:headers",
++    "//Source/XPSP1/NT/public/internal/net/inc:headers",
++    "//Source/XPSP1/NT/public/sdk/inc:headers",
++    "//Source/XPSP1/NT/public/halkit/inc:headers",
++    "//Source/XPSP1/NT/base/win32/inc:headers",
++    "//Source/XPSP1/NT/base/inc:headers",
++    "//Source/XPSP1/NT/base/fs/fastfat:headers",
++    "//Source/XPSP1/NT/public/internal/windows/inc:headers",
++]
++
++_COMMON_INCLUDES = [
++    "Source/XPSP1/NT/base/ntos",
++    "Source/XPSP1/NT/base/ntos/inc",
++    "Source/XPSP1/NT/base/ntos/ke",
++    "Source/XPSP1/NT/base/ntos/io",
++    "Source/XPSP1/NT/base/ntos/io/pnpmgr",
++    "Source/XPSP1/NT/base/ntos/kd64",
++    "Source/XPSP1/NT/base/ntos/vdm/i386",
++    "Source/XPSP1/NT/public/ddk/inc",
++    "Source/XPSP1/NT/public/internal/base/inc",
++    "Source/XPSP1/NT/public/internal/ds/inc",
++    "Source/XPSP1/NT/public/internal/sdktools/inc",
++    "Source/XPSP1/NT/public/internal/net/inc",
++    "Source/XPSP1/NT/public/sdk/inc",
++    "Source/XPSP1/NT/public/sdk/inc/crt",
++    "Source/XPSP1/NT/public/halkit/inc",
++    "Source/XPSP1/NT/base/win32/inc",
++    "Source/XPSP1/NT/base/inc",
++    "Source/XPSP1/NT/base/fs/fastfat",
++    "Source/XPSP1/NT/public/internal/ds/inc/crypto",
++    "Source/XPSP1/NT/public/internal/windows/inc",
++]
++
++_KERNEL_DEFINES = [
++    "_NTSYSTEM_",
++]
++
++nt5_c_library(
++    name = "dbgk_up",
++    srcs = [
++        "dbgk/dbgkobj.c",
++        "dbgk/dbgkport.c",
++        "dbgk/dbgkproc.c",
++    ],
++    hdrs = _COMMON_HEADERS,
++    includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/dbgk"],
++    defines = _KERNEL_DEFINES,
++    copts = ["/W4"],
++)
++
++nt5_c_library(
++    name = "init_up",
++    srcs = ["init/init.c", "init/anim.c", "init/port.c", "init/bootvid.c"],
++    hdrs = _COMMON_HEADERS,
++    includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/init", "Source/XPSP1/NT/base/ntos/nls"],
++    defines = _KERNEL_DEFINES + ["KERNEL_NAME=\\\"ntoskrnl.exe\\\""],
++    generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources"],
++    extra_object_deps = [":ntoskrnl_resource"],
++)
++
++nt5_rc_resource(
++    name = "ntoskrnl_resource",
++    src = "init/ntoskrnl.rc",
++    hdrs = [":init_resource_inputs", "//Source/XPSP1/NT/public/sdk/inc:headers"],
++    includes = ["Source/XPSP1/NT/base/ntos/init", "Source/XPSP1/NT/public/sdk/inc"],
++    defines = ["KERNEL_NAME=ntoskrnl.exe"],
++    generated_headers = ["//Source/XPSP1/NT/base/ntos/nls:bugcodes"],
++)
++
++[
++    nt5_rc_resource(
++        name = "%s_resource" % image,
++        src = "init/ntoskrnl.rc",
++        hdrs = [":init_resource_inputs", "//Source/XPSP1/NT/public/sdk/inc:headers"],
++        includes = ["Source/XPSP1/NT/base/ntos/init", "Source/XPSP1/NT/public/sdk/inc"],
++        defines = ["KERNEL_NAME=%s.exe" % image],
++        generated_headers = ["//Source/XPSP1/NT/base/ntos/nls:bugcodes"],
++    )
++    for image in ["ntkrnlmp", "ntkrnlpa", "ntkrpamp"]
++]
++
++[
++    nt5_c_library(
++        name = "init_%s" % variant,
++        srcs = ["init/init.c", "init/anim.c", "init/port.c", "init/bootvid.c"],
++        hdrs = _COMMON_HEADERS,
++        includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/init", "Source/XPSP1/NT/base/ntos/nls"],
++        defines = _KERNEL_DEFINES + ["KERNEL_NAME=\\\"%s.exe\\\"" % image],
++        generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources"],
++        extra_object_deps = [":%s_resource" % image],
++        variant = variant,
++    )
++    for variant, image in [("mp", "ntkrnlmp"), ("pae", "ntkrnlpa"), ("paemp", "ntkrpamp")]
++]
++
++nt5_def_file(
++    name = "ntoskrnl_def",
++    src = "init/ntoskrnl.src",
++    append_src = "init/i386def.src",
++    hdrs = [":private_headers"],
++    includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/init"],
++    defines = _KERNEL_DEFINES,
++)
++
++nt5_import_library(
++    name = "ntoskrnl_exports",
++    definition = ":ntoskrnl_def",
++    resolution_libraries = [
++        "//Source/XPSP1/NT/base/ntos/arb:arbiter_up",
++        ":cache_up", ":config_up", ":dbgk_up", ":fsrtl_up", ":fstub_up",
++        ":init_up", ":io_up", ":io_iomgr_up", ":io_pnpmgr_up", ":kd64_up",
++        ":ke_up", ":lpc_up", ":mm_up", ":ob_up", ":po_up", ":ps_up",
++        ":raw_up", ":rtl_up", ":se_up", ":vdm_up", ":verifier_up", ":wmi_up",
++        ":perf_up", ":ex_up",
++        "//Source/XPSP1/NT/ds/security/base/lsa/client:lsakrnlp",
++        "//Source/XPSP1/NT/public/sdk/lib/i386:libcntpr.lib",
++    ],
++)
++
++nt5_kernel_image(
++    name = "ntoskrnl_up",
++    image_name = "ntoskrnl.exe",
++    exports = ":ntoskrnl_exports",
++    resources = [":ntoskrnl_resource"],
++    objects = [":ntoskrnl_stub"],
++    libraries = [
++        "//Source/XPSP1/NT/base/ntos/arb:arbiter_up",
++        ":cache_up", ":config_up", ":dbgk_up", ":fsrtl_up", ":fstub_up",
++        ":init_up", ":io_up", ":io_iomgr_up", ":io_pnpmgr_up", ":kd64_up",
++        ":ke_up", ":lpc_up", ":mm_up", ":ob_up", ":po_up", ":ps_up",
++        ":raw_up", ":rtl_up", ":se_up", ":vdm_up", ":verifier_up", ":wmi_up",
++        ":perf_up", ":ex_up",
++        "//Source/XPSP1/NT/ds/security/base/lsa/client:lsakrnlp",
++        "//Source/XPSP1/NT/public/sdk/lib/i386:libcntpr.lib",
++        "//Source/XPSP1/NT/base/hals/halacpi/picacpi:hal",
++        "//Source/XPSP1/NT/base/boot/bootvid:bootvid",
++        "//Source/XPSP1/NT/windows/appcompat/sdbapi:sdbapint",
++        "//Source/XPSP1/NT/base/boot/kdcom:kdcom",
++    ],
++)
++
++_MP_KERNEL_LIBS = [
++    "//Source/XPSP1/NT/base/ntos/arb:arbiter_mp",
++    ":cache_mp", ":config_mp", ":dbgk_mp", ":fsrtl_mp", ":fstub_mp",
++    ":init_mp", ":io_mp", ":io_iomgr_mp", ":io_pnpmgr_mp", ":kd64_mp",
++    ":ke_mp", ":lpc_mp", ":mm_mp", ":ob_mp", ":po_mp", ":ps_mp",
++    ":raw_mp", ":rtl_mp", ":se_mp", ":vdm_mp", ":verifier_mp", ":wmi_mp",
++    ":perf_mp", ":ex_mp",
++    "//Source/XPSP1/NT/ds/security/base/lsa/client:lsakrnlp",
++    "//Source/XPSP1/NT/public/sdk/lib/i386:libcntpr.lib",
++]
++
++_UP_KERNEL_LIBS = [
++    "//Source/XPSP1/NT/base/ntos/arb:arbiter_up",
++    ":cache_up", ":config_up", ":dbgk_up", ":fsrtl_up", ":fstub_up",
++    ":init_up", ":io_up", ":io_iomgr_up", ":io_pnpmgr_up", ":kd64_up",
++    ":ke_up", ":lpc_up", ":mm_up", ":ob_up", ":po_up", ":ps_up",
++    ":raw_up", ":rtl_up", ":se_up", ":vdm_up", ":verifier_up", ":wmi_up",
++    ":perf_up", ":ex_up",
++    "//Source/XPSP1/NT/ds/security/base/lsa/client:lsakrnlp",
++    "//Source/XPSP1/NT/public/sdk/lib/i386:libcntpr.lib",
++]
++
++_PLATFORM_LINK_LIBS = [
++    "//Source/XPSP1/NT/base/hals/halacpi/picacpi:hal",
++    "//Source/XPSP1/NT/base/boot/bootvid:bootvid",
++    "//Source/XPSP1/NT/windows/appcompat/sdbapi:sdbapint",
++    "//Source/XPSP1/NT/base/boot/kdcom:kdcom",
++]
++
++nt5_import_library(name = "ntkrnlmp_exports", definition = ":ntoskrnl_def", resolution_libraries = _MP_KERNEL_LIBS)
++nt5_import_library(name = "ntkrnlpa_exports", definition = ":ntoskrnl_def", resolution_libraries = _UP_KERNEL_LIBS[:6] + [":init_pae"] + _UP_KERNEL_LIBS[7:10] + [":kd64_pae", ":ke_pae"] + _UP_KERNEL_LIBS[12:13] + [":mm_pae"] + _UP_KERNEL_LIBS[14:])
++nt5_import_library(name = "ntkrpamp_exports", definition = ":ntoskrnl_def", resolution_libraries = _MP_KERNEL_LIBS[:6] + [":init_paemp"] + _MP_KERNEL_LIBS[7:10] + [":kd64_paemp", ":ke_paemp"] + _MP_KERNEL_LIBS[12:13] + [":mm_paemp"] + _MP_KERNEL_LIBS[14:])
++
++nt5_kernel_image(
++    name = "ntkrnlmp_image", image_name = "ntkrnlmp.exe", exports = ":ntkrnlmp_exports",
++    resources = [":ntkrnlmp_resource"], libraries = _MP_KERNEL_LIBS + _PLATFORM_LINK_LIBS,
++    objects = [":ntkrnlmp_stub"],
++    alignment = "0x1000",
++)
++nt5_kernel_image(
++    name = "ntkrnlpa_image", image_name = "ntkrnlpa.exe", exports = ":ntkrnlpa_exports",
++    resources = [":ntkrnlpa_resource"],
++    objects = [":ntkrnlpa_stub"],
++    libraries = _UP_KERNEL_LIBS[:6] + [":init_pae"] + _UP_KERNEL_LIBS[7:10] + [":kd64_pae", ":ke_pae"] + _UP_KERNEL_LIBS[12:13] + [":mm_pae"] + _UP_KERNEL_LIBS[14:] + _PLATFORM_LINK_LIBS,
++    large_address_aware = True,
++)
++nt5_kernel_image(
++    name = "ntkrpamp_image", image_name = "ntkrpamp.exe", exports = ":ntkrpamp_exports",
++    resources = [":ntkrpamp_resource"],
++    objects = [":ntkrpamp_stub"],
++    libraries = _MP_KERNEL_LIBS[:6] + [":init_paemp"] + _MP_KERNEL_LIBS[7:10] + [":kd64_paemp", ":ke_paemp"] + _MP_KERNEL_LIBS[12:13] + [":mm_paemp"] + _MP_KERNEL_LIBS[14:] + _PLATFORM_LINK_LIBS,
++    alignment = "0x1000", large_address_aware = True,
++)
++
++[
++    nt5_cl_objects(
++        name = "%s_stub" % image,
++        srcs = ["init/%s.c" % image],
++        hdrs = _COMMON_HEADERS,
++        includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/init"],
++        defines = _KERNEL_DEFINES,
++        variant = variant,
++    )
++    for image, variant in [("ntoskrnl", "up"), ("ntkrnlmp", "mp"), ("ntkrnlpa", "pae"), ("ntkrpamp", "paemp")]
++]
++
++nt5_c_library(
++    name = "ntsym_up",
++    srcs = ["ntsym/ntsym.c"],
++    hdrs = _COMMON_HEADERS + [
++        "//Source/XPSP1/NT/base/busdrv/pci:headers",
++        "//Source/XPSP1/NT/base/busdrv/isapnp:headers",
++    ],
++    includes = _COMMON_INCLUDES + [
++        "Source/XPSP1/NT/base/ntos/ntsym",
++        "Source/XPSP1/NT/base/ntos/cache",
++        "Source/XPSP1/NT/base/ntos/config",
++        "Source/XPSP1/NT/base/ntos/ke",
++        "Source/XPSP1/NT/base/ntos/mm",
++        "Source/XPSP1/NT/base/ntos/po",
++        "Source/XPSP1/NT/base/ntos/rtl",
++        "Source/XPSP1/NT/base/ntos/se",
++        "Source/XPSP1/NT/base/ntos/verifier",
++        "Source/XPSP1/NT/base/busdrv/pci",
++        "Source/XPSP1/NT/base/busdrv/isapnp",
++        "Source/XPSP1/NT/public/ddk/inc/wdm",
++    ],
++    defines = _KERNEL_DEFINES,
++    generated_headers = [
++        "//Source/XPSP1/NT/base/published:debug_filter_sources",
++        "//Source/XPSP1/NT/base/busdrv/pci:pci_codes",
++        "//Source/XPSP1/NT/base/busdrv/isapnp:messages",
++    ],
++)
++
++nt5_cl_objects(
++    name = "rtl_generr_object",
++    srcs = ["rtl/generr.c"],
++    hdrs = _COMMON_HEADERS,
++    includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/rtl"],
++    defines = _KERNEL_DEFINES + ["NTOS_KERNEL_RUNTIME=1", "USE_RTL_ASSERT2=1"],
++)
++
++nt5_generr(
++    name = "rtl_error_header",
++    object = ":rtl_generr_object",
++)
++
++nt5_ke_services_objects(
++    name = "ke_up_services",
++    services = "ke/services.tab",
++    table_stub = "ke/i386/table.stb",
++    services_stub = "ke/i386/services.stb",
++    hdrs = _COMMON_HEADERS,
++    includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/ke", "Source/XPSP1/NT/base/ntos/ke/i386"],
++    defines = _KERNEL_DEFINES,
++    generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources"],
++)
++
++[
++    nt5_ke_services_objects(
++        name = "ke_%s_services" % variant,
++        services = "ke/services.tab",
++        table_stub = "ke/i386/table.stb",
++        services_stub = "ke/i386/services.stb",
++        hdrs = _COMMON_HEADERS,
++        includes = _COMMON_INCLUDES + ["Source/XPSP1/NT/base/ntos/ke", "Source/XPSP1/NT/base/ntos/ke/i386"],
++        defines = _KERNEL_DEFINES,
++        generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources"],
++        variant = variant,
++    )
++    for variant in ["mp", "pae", "paemp"]
++]
++
++declare_ntos_up_c_libraries(
++    common_headers = _COMMON_HEADERS,
++    common_includes = _COMMON_INCLUDES,
++    kernel_defines = _KERNEL_DEFINES,
++    generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources", ":rtl_error_header"],
++)
++
++declare_ntos_up_mixed_libraries(
++    common_headers = _COMMON_HEADERS,
++    common_includes = _COMMON_INCLUDES,
++    kernel_defines = _KERNEL_DEFINES,
++    generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources", ":rtl_error_header"],
++)
++
++declare_ntos_x86fre_variant_libraries(
++    common_headers = _COMMON_HEADERS,
++    common_includes = _COMMON_INCLUDES,
++    kernel_defines = _KERNEL_DEFINES,
++    generated_headers = ["//Source/XPSP1/NT/base/published:debug_filter_sources", ":rtl_error_header"],
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/ntos/inc/BUILD.bazel b/Source/XPSP1/NT/base/ntos/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/ntos/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"]),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/ntos/nls/BUILD.bazel b/Source/XPSP1/NT/base/ntos/nls/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/ntos/nls/BUILD.bazel
+@@ -0,0 +1,7 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_message")
++
++package(default_visibility = ["//visibility:public"])
++
++nt5_message(name = "bugcodes", src = "bugcodes.mc")
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/published/BUILD.bazel b/Source/XPSP1/NT/base/published/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/published/BUILD.bazel
+@@ -0,0 +1,9 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_genlvl")
++
++nt5_genlvl(
++    name = "debug_filter_sources",
++    component_table = "componentid.tab",
++    visibility = ["//visibility:public"],
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/base/win32/inc/BUILD.bazel b/Source/XPSP1/NT/base/win32/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/base/win32/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/ds/security/base/lsa/client/BUILD.bazel b/Source/XPSP1/NT/ds/security/base/lsa/client/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/ds/security/base/lsa/client/BUILD.bazel
+@@ -0,0 +1,39 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["*.h"]))
++
++nt5_c_library(
++    name = "lsakrnlp",
++    srcs = ["austub.c"],
++    hdrs = [
++        ":headers",
++        "//Source/XPSP1/NT/base/ntos:private_headers",
++        "//Source/XPSP1/NT/base/ntos/inc:headers",
++        "//Source/XPSP1/NT/base/inc:headers",
++        "//Source/XPSP1/NT/ds/security/inc:headers",
++        "//Source/XPSP1/NT/ds/security/base/lsa/inc:headers",
++        "//Source/XPSP1/NT/public/ddk/inc:headers",
++        "//Source/XPSP1/NT/public/internal/base/inc:headers",
++        "//Source/XPSP1/NT/public/internal/ds/inc:headers",
++        "//Source/XPSP1/NT/public/sdk/inc:headers",
++    ],
++    includes = [
++        "Source/XPSP1/NT/ds/security/base/lsa/client",
++        "Source/XPSP1/NT/ds/security/base/lsa/inc",
++        "Source/XPSP1/NT/ds/security/inc",
++        "Source/XPSP1/NT/base/ntos",
++        "Source/XPSP1/NT/base/ntos/inc",
++        "Source/XPSP1/NT/base/inc",
++        "Source/XPSP1/NT/public/ddk/inc",
++        "Source/XPSP1/NT/public/internal/base/inc",
++        "Source/XPSP1/NT/public/internal/ds/inc",
++        "Source/XPSP1/NT/public/sdk/inc",
++        "Source/XPSP1/NT/public/sdk/inc/crt",
++    ],
++    defines = ["_NTSYSTEM_=1"],
++    copts = ["/FIsecwarn.h"],
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/ds/security/base/lsa/inc/BUILD.bazel b/Source/XPSP1/NT/ds/security/base/lsa/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/ds/security/base/lsa/inc/BUILD.bazel
+@@ -0,0 +1,5 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True))
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/ds/security/inc/BUILD.bazel b/Source/XPSP1/NT/ds/security/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/ds/security/inc/BUILD.bazel
+@@ -0,0 +1,5 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True))
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/ddk/inc/BUILD.bazel b/Source/XPSP1/NT/public/ddk/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/ddk/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"]),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/ddk/lib/i386/BUILD.bazel b/Source/XPSP1/NT/public/ddk/lib/i386/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/ddk/lib/i386/BUILD.bazel
+@@ -0,0 +1,4 @@
++package(default_visibility = ["//visibility:public"])
++exports_files(["hal.lib"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/halkit/inc/BUILD.bazel b/Source/XPSP1/NT/public/halkit/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/halkit/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/halkit/lib/i386/BUILD.bazel b/Source/XPSP1/NT/public/halkit/lib/i386/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/halkit/lib/i386/BUILD.bazel
+@@ -0,0 +1,4 @@
++package(default_visibility = ["//visibility:public"])
++exports_files(["kdcom.lib"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/base/inc/BUILD.bazel b/Source/XPSP1/NT/public/internal/base/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/base/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"]),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/base/lib/i386/BUILD.bazel b/Source/XPSP1/NT/public/internal/base/lib/i386/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/base/lib/i386/BUILD.bazel
+@@ -0,0 +1,4 @@
++package(default_visibility = ["//visibility:public"])
++exports_files(["bootvid.lib"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/ds/inc/BUILD.bazel b/Source/XPSP1/NT/public/internal/ds/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/ds/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/ds/lib/i386/BUILD.bazel b/Source/XPSP1/NT/public/internal/ds/lib/i386/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/ds/lib/i386/BUILD.bazel
+@@ -0,0 +1,4 @@
++package(default_visibility = ["//visibility:public"])
++exports_files(["lsakrnlp.lib"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/net/inc/BUILD.bazel b/Source/XPSP1/NT/public/internal/net/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/net/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/sdktools/inc/BUILD.bazel b/Source/XPSP1/NT/public/internal/sdktools/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/sdktools/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/windows/inc/BUILD.bazel b/Source/XPSP1/NT/public/internal/windows/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/windows/inc/BUILD.bazel
+@@ -0,0 +1,5 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(name = "headers", srcs = glob(["**/*.h", "**/*.inc"], allow_empty = True))
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/internal/windows/lib/i386/BUILD.bazel b/Source/XPSP1/NT/public/internal/windows/lib/i386/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/internal/windows/lib/i386/BUILD.bazel
+@@ -0,0 +1,4 @@
++package(default_visibility = ["//visibility:public"])
++exports_files(["sdbapint.lib"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/sdk/inc/BUILD.bazel b/Source/XPSP1/NT/public/sdk/inc/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/sdk/inc/BUILD.bazel
+@@ -0,0 +1,8 @@
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "headers",
++    srcs = glob(["**/*.h", "**/*.inc"]),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/public/sdk/lib/i386/BUILD.bazel b/Source/XPSP1/NT/public/sdk/lib/i386/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/public/sdk/lib/i386/BUILD.bazel
+@@ -0,0 +1,4 @@
++package(default_visibility = ["//visibility:public"])
++exports_files(["libcntpr.lib"])
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/tools/x86/BUILD.bazel b/Source/XPSP1/NT/tools/x86/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/tools/x86/BUILD.bazel
+@@ -0,0 +1,25 @@
++package(default_visibility = ["//visibility:public"])
++
++exports_files([
++    "cl.exe",
++    "genlvl.exe",
++    "generr.exe",
++    "gensrv.exe",
++    "lib.exe",
++    "link.exe",
++    "mc.exe",
++    "ml.exe",
++    "rc.exe",
++])
++
++# Keep the compiler beside its historical helper DLLs in the execution tree.
++# Later rules will narrow this to per-tool runtime sets after dependency audit.
++filegroup(
++    name = "vc7_x86_payload",
++    srcs = glob([
++        "*.dll",
++        "*.exe",
++    ]),
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/Source/XPSP1/NT/windows/appcompat/sdbapi/BUILD.bazel b/Source/XPSP1/NT/windows/appcompat/sdbapi/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/Source/XPSP1/NT/windows/appcompat/sdbapi/BUILD.bazel
+@@ -0,0 +1,61 @@
++load("//bazel/legacy:nt5_rules.bzl", "nt5_c_library")
++
++package(default_visibility = ["//visibility:public"])
++
++filegroup(
++    name = "private_headers",
++    srcs = glob(["**/*.h"]),
++)
++
++_HEADERS = [
++    ":private_headers",
++    "//Source/XPSP1/NT/base/ntos:private_headers",
++    "//Source/XPSP1/NT/base/ntos/inc:headers",
++    "//Source/XPSP1/NT/base/inc:headers",
++    "//Source/XPSP1/NT/base/win32/inc:headers",
++    "//Source/XPSP1/NT/public/ddk/inc:headers",
++    "//Source/XPSP1/NT/public/halkit/inc:headers",
++    "//Source/XPSP1/NT/public/internal/base/inc:headers",
++    "//Source/XPSP1/NT/public/internal/ds/inc:headers",
++    "//Source/XPSP1/NT/public/internal/windows/inc:headers",
++    "//Source/XPSP1/NT/public/sdk/inc:headers",
++]
++
++_INCLUDES = [
++    "Source/XPSP1/NT/windows/appcompat/sdbapi",
++    "Source/XPSP1/NT/base/ntos",
++    "Source/XPSP1/NT/base/ntos/inc",
++    "Source/XPSP1/NT/base/inc",
++    "Source/XPSP1/NT/base/win32/inc",
++    "Source/XPSP1/NT/public/ddk/inc",
++    "Source/XPSP1/NT/public/halkit/inc",
++    "Source/XPSP1/NT/public/internal/base/inc",
++    "Source/XPSP1/NT/public/internal/ds/inc",
++    "Source/XPSP1/NT/public/internal/windows/inc",
++    "Source/XPSP1/NT/public/sdk/inc",
++    "Source/XPSP1/NT/public/sdk/inc/crt",
++]
++
++nt5_c_library(
++    name = "sdbapint",
++    srcs = [
++        "attributes.c",
++        "dbaccess.c",
++        "findtag.c",
++        "guid.c",
++        "hash.c",
++        "index.c",
++        "kmode/ntkmode.c",
++        "ntbase.c",
++        "ntver.c",
++        "read.c",
++        "sdbapi.c",
++    ],
++    hdrs = _HEADERS,
++    includes = _INCLUDES,
++    defines = ["KERNEL_MODE", "NT_SYSTEM=1", "_NTSYSTEM_=1"],
++    pch_header = "sdbp.h",
++    pch_symbol_name = "sdbapint",
++)
++
++filegroup(name="source_tree",srcs=glob(["**"],exclude=["BUILD.bazel"]),visibility=["//visibility:public"])
+diff --git a/BUILD.bazel b/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/BUILD.bazel
+@@ -0,0 +1,3 @@
++package(default_visibility=["//visibility:public"])
++exports_files(["UPSTREAM_COMMIT"])
++filegroup(name="source_tree",srcs=glob(["Source/XPSP1/NT/**"],exclude=["**/BUILD.bazel"]) + ['//Source/XPSP1/NT/base/boot/bootvid:source_tree', '//Source/XPSP1/NT/base/boot/kdcom:source_tree', '//Source/XPSP1/NT/base/busdrv/isapnp:source_tree', '//Source/XPSP1/NT/base/busdrv/pci:source_tree', '//Source/XPSP1/NT/base/fs/fastfat:source_tree', '//Source/XPSP1/NT/base/hals:source_tree', '//Source/XPSP1/NT/base/hals/halacpi/apic:source_tree', '//Source/XPSP1/NT/base/hals/halacpi/mpapic:source_tree', '//Source/XPSP1/NT/base/hals/halacpi/picacpi:source_tree', '//Source/XPSP1/NT/base/inc:source_tree', '//Source/XPSP1/NT/base/ntos:source_tree', '//Source/XPSP1/NT/base/ntos/arb:source_tree', '//Source/XPSP1/NT/base/ntos/inc:source_tree', '//Source/XPSP1/NT/base/ntos/nls:source_tree', '//Source/XPSP1/NT/base/published:source_tree', '//Source/XPSP1/NT/base/win32/inc:source_tree', '//Source/XPSP1/NT/ds/security/base/lsa/client:source_tree', '//Source/XPSP1/NT/ds/security/base/lsa/inc:source_tree', '//Source/XPSP1/NT/ds/security/inc:source_tree', '//Source/XPSP1/NT/public/ddk/inc:source_tree', '//Source/XPSP1/NT/public/ddk/lib/i386:source_tree', '//Source/XPSP1/NT/public/halkit/inc:source_tree', '//Source/XPSP1/NT/public/halkit/lib/i386:source_tree', '//Source/XPSP1/NT/public/internal/base/inc:source_tree', '//Source/XPSP1/NT/public/internal/base/lib/i386:source_tree', '//Source/XPSP1/NT/public/internal/ds/inc:source_tree', '//Source/XPSP1/NT/public/internal/ds/lib/i386:source_tree', '//Source/XPSP1/NT/public/internal/net/inc:source_tree', '//Source/XPSP1/NT/public/internal/sdktools/inc:source_tree', '//Source/XPSP1/NT/public/internal/windows/inc:source_tree', '//Source/XPSP1/NT/public/internal/windows/lib/i386:source_tree', '//Source/XPSP1/NT/public/sdk/inc:source_tree', '//Source/XPSP1/NT/public/sdk/lib/i386:source_tree', '//Source/XPSP1/NT/tools/x86:source_tree', '//Source/XPSP1/NT/windows/appcompat/sdbapi:source_tree'])
+diff --git a/Source/XPSP1/NT/base/boot/startup/makefile.inc b/Source/XPSP1/NT/base/boot/startup/makefile.inc
+index 18cc52c63..e9dff906c 100644
+--- a/Source/XPSP1/NT/base/boot/startup/makefile.inc
++++ b/Source/XPSP1/NT/base/boot/startup/makefile.inc
+@@ -41,7 +41,7 @@ CINC=   -I. -I$(SDK_INC_PATH) -I..\i386 -I..\i386\$(LANGUAGE)
+ 
+ ASM=    masm386
+ AFLAGS= -Mx  -z $(LOADER_DEBUG) $(GAFLAGS) $(ALT_PROJECT_FLAGS)
+-AINC=  -I$(SDK_INC_PATH) -I..\i386
++AINCSX= $(SDK_INC_PATH);..\i386
+ 
+ 
+ #
+@@ -60,10 +60,12 @@ DEF=
+ 
+ 
+ {..\i386\}.asm{$(_OBJ_DIR)\i386\}.obj:
+-        $(ASM) $(AFLAGS) $(AINC) $< $@;
++        set include=$(AINCSX)
++        $(ASM) $(AFLAGS) $<, $@;
+ 
+ {..\i386\}.asm.lst:
+-        $(ASM) -l -n $(AFLAGS) $(AINC) $<;
++        set include=$(AINCSX)
++        $(ASM) -l -n $(AFLAGS) $<;
+ 
+ #        $(CC) $(CFLAGS) $(CINC) -c $<
+ 
+diff --git a/Source/XPSP1/NT/base/ntos/ke/i386/ctxswap.asm b/Source/XPSP1/NT/base/ntos/ke/i386/ctxswap.asm
+--- a/Source/XPSP1/NT/base/ntos/ke/i386/ctxswap.asm
++++ b/Source/XPSP1/NT/base/ntos/ke/i386/ctxswap.asm
+@@ -823,6 +823,8 @@
+         mov     [ecx]+(KGDT_R3_TEB+KgdtBaseMid), al  ;
+         mov     [ecx]+(KGDT_R3_TEB+KgdtBaseHi), ah
+ 
++        call    KiRestoreEmbeddedTls
++
+ ;
+ ; Update context switch counters.
+ ;
+@@ -1137,6 +1139,32 @@
+ stdENDP _KiFlushIcache
+ stdENDP _KiFlushDcache
+ 
++
++; The embedded ELF runtime records its i386 TLS base in KTHREAD.TlsArray.
++; Restore GDT[12] and GS after a thread/address-space switch. This replaces
++; framebuffer-driver patches that depended on offsets in one linked kernel.
++; Native threads have a zero TlsArray and retain the original null GS.
++KiRestoreEmbeddedTls proc
++        mov     ecx, PCR[PcPrcbData+PbCurrentThread]
++        mov     eax, [ecx]+ThTlsArray
++        test    eax, eax
++        jz      short embedded_tls_clear
++        mov     ecx, PCR[PcGdt]
++        mov     word ptr [ecx+060h], 0FFFFh
++        mov     word ptr [ecx+062h], ax
++        shr     eax, 16
++        mov     byte ptr [ecx+064h], al
++        mov     byte ptr [ecx+065h], 0F3h
++        mov     byte ptr [ecx+066h], 0CFh
++        mov     byte ptr [ecx+067h], ah
++        mov     eax, 063h
++        mov     gs, ax
++        ret
++embedded_tls_clear:
++        xor     eax, eax
++        mov     gs, ax
++        ret
++KiRestoreEmbeddedTls endp
+ 
+ _TEXT$00   ends
+ 
+@@ -1583,6 +1611,7 @@
+ ;
+ 
+ kisp10: lldt    ax
++        call    KiRestoreEmbeddedTls
+         stdRET    _KiSwapProcess
+ 
+ if DBG

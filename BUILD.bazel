@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+load("//bazel:embedded.bzl", "embedded_build")
+package(default_visibility = ["//visibility:public"])
+alias(name = "kernel", actual = "@nt51//Source/XPSP1/NT/base/ntos:ntoskrnl_up")
+filegroup(
+    name = "kernel_bundle",
+    srcs = [
+        ":kernel",
+        "@nt51//Source/XPSP1/NT/base/hals/halacpi/picacpi:halacpi_image",
+        "@nt51//Source/XPSP1/NT/base/boot/bootvid:bootvid_image",
+        "@nt51//Source/XPSP1/NT/base/boot/kdcom:kdcom_image",
+    ],
+)
+
+embedded_build(
+    name = "boot_support", operation = "boot_support", handler = "//tools:build_boot.py", config = "//tools:build-config.json",
+    nt = "@nt51//:UPSTREAM_COMMIT", srcs = ["@nt51//:source_tree"],
+    deps = [":kernel_bundle", "@nt51//Source/XPSP1/NT/base/ntos:ke_up"],
+)
+embedded_build(
+    name = "native", operation = "native", handler = "//tools:build_native.py", config = "//tools:build-config.json",
+    nt = "@nt51//:UPSTREAM_COMMIT", srcs = ["@nt51//:source_tree", "//native:sources"],
+    deps = [":kernel_bundle"],
+)
+alias(name = "minimal_image", actual = "//minimal_rootfs:usb_image")
+alias(name = "xfce_image", actual = "//rootfs:usb_image")

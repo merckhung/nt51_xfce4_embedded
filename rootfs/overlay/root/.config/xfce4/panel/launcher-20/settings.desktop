@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Type=Application
+Name=Settings
+Exec=xfce4-settings-manager
+Icon=preferences-system
+Terminal=false

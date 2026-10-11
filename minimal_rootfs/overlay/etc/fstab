@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# /etc/fstab: static file system information.
+# <file system> <mount pt>     <type>   <options>         <dump> <pass>
+/dev/ram0       /              fat16    defaults          0      1
+/dev/sda1       /mnt/usb       fat16    defaults,noauto   0      2

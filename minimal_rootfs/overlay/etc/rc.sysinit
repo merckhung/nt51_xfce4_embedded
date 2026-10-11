@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+echo "[rc.sysinit] Windows XP Embedded 2 (MUSL + BusyBox + USB + RTL8139) initializing..."
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+export USER=root
+export TERM=vt100
+insmod /lib/modules/usbdrv.sys
+insmod /lib/modules/rtl8139.sys
+ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up
+echo "[rc.sysinit] Loaded usbdrv.sys and rtl8139.sys."
+ps aux > /tmp/ps-boot.txt
+ps_status=$?
+echo "[rc.sysinit] PS_AUX_EXIT=$ps_status"
+[ "$ps_status" -eq 0 ] || exit 1
+

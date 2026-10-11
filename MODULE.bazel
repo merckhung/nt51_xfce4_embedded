@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-2.0-only
+module(name = "nt51_xfce4_embedded", version = "0.1.0")
+
+nt51_repository = use_repo_rule("//bazel:repositories.bzl", "nt51_repository")
+nt51_repository(
+    name = "nt51",
+    remote = "https://github.com/vipinkiruba/kernel-NT5.1.git",
+    commit = "1b390dddff9fe017e9c11a7845c67a887c3483dc",
+    patches = ["//patches:nt51-bazel.patch"],
+)
+
+release_repository = use_repo_rule("//bazel:repositories.bzl", "release_repository")
+release_repository(
+    name = "musl_minimal",
+    urls = ["https://musl.libc.org/releases/musl-1.2.5.tar.gz"],
+    sha256 = "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+    strip_prefix = "musl-1.2.5",
+    patches = ["//patches:musl-minimal_rootfs.patch"],
+)
+release_repository(
+    name = "musl_xfce",
+    urls = ["https://musl.libc.org/releases/musl-1.2.5.tar.gz"],
+    sha256 = "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+    strip_prefix = "musl-1.2.5",
+    patches = ["//patches:musl-rootfs.patch"],
+)
+release_repository(
+    name = "busybox",
+    urls = ["https://busybox.net/downloads/busybox-1.36.1.tar.bz2"],
+    sha256 = "b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314",
+    strip_prefix = "busybox-1.36.1",
+    patches = ["//patches:busybox-rootfs.patch"],
+)
+alpine_repository = use_repo_rule("//bazel:repositories.bzl", "alpine_repository")
+alpine_repository(name = "alpine_xfce", manifest = "//rootfs:alpine-packages.json")

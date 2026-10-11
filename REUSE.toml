@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0-only
+version = 1
+
+# License metadata for project assets whose formats cannot accept a header.
+[[annotations]]
+path = [
+    ".bazelversion",
+    "docs/screenshots/minimal-tests.png",
+    "docs/screenshots/xfce-desktop.png",
+    "docs/screenshots/xfce-ps.png",
+    "docs/screenshots/xfce-lsmod.png",
+    "docs/screenshots/xfce-uname.png",
+    "docs/screenshots/xfce-nttest.png",
+    "docs/screenshots/xfce-system32.png",
+    "docs/screenshots/xfce-drivers.png",
+    "docs/screenshots/xfce-nt-modules.png",
+    "docs/screenshots/xfce-registry.png",
+    "docs/screenshots/xfce-security.png",
+    "docs/screenshots/xfce-nt-processes.png",
+    "docs/verification.json",
+    "minimal_rootfs/overlay/etc/motd",
+    "minimal_rootfs/overlay/etc/passwd",
+    "rootfs/alpine-packages.json",
+    "rootfs/overlay/etc/machine-id",
+    "rootfs/overlay/etc/motd",
+    "rootfs/overlay/etc/passwd",
+    "rootfs/overlay/var/lib/dbus/machine-id",
+    "tools/build-config.json",
+]
+SPDX-License-Identifier = "GPL-2.0-only"
