@@ -1,11 +1,5 @@
 {
-  "date": "2026-10-11",
-  "host": "Windows x64",
-  "tools": {
-    "bazel": "9.2.0",
-    "llvm": "22.1.0",
-    "qemu": "11.1.0"
-  },
+  "date": "2026-10-18",
   "nt_source_commit": "1b390dddff9fe017e9c11a7845c67a887c3483dc",
   "fat_regression_tests": {
     "run": 2,
@@ -182,9 +176,9 @@
     "desktop_screenshot": "docs/screenshots/xfce-desktop.png"
   },
   "xfce_terminal_captures": {
-    "date": "2026-10-11",
-    "image_sha256": "951be44cb700b4b56fbb43f156526aea97c723999d88ebdc4fe37b42d758152e",
-    "capture_method": "Unedited QEMU screendump PNG of the XFCE terminal",
+    "date": "2026-10-18",
+    "image_sha256": "7e9540c2d2704e332659a905950600218184dd20b539800b3fb3575adff97126",
+    "capture_method": "Unedited QEMU screendump PNG of the XFCE terminal; commands typed through QEMU PS/2 keyboard input after a mouse click focused the terminal",
     "observed_results": {
       "nttest_suites": [
         9,
@@ -217,14 +211,14 @@
           "lsmod"
         ],
         "screenshot": "docs/screenshots/xfce-lsmod.png",
-        "sha256": "522e2cab0459e0cf0c7c34dfc63466138315d92ae3af2da5bcb454fbe844bd4f"
+        "sha256": "7f82be12c754b2fd47899667666c459061abdccffc9d0a494bdd0018a88363c3"
       },
       {
         "commands": [
           "uname -a"
         ],
         "screenshot": "docs/screenshots/xfce-uname.png",
-        "sha256": "8ab3f944384debb433458a0f0cd97a1d285714b9836926d5187f809ce1e5293a"
+        "sha256": "5a82fdf6a712cc7807896f9e921c3ceb1f51f796b107646e58c08359ec7ebc2e"
       },
       {
         "commands": [
@@ -233,7 +227,7 @@
           "tail -n 19 /tmp/nttest-capture.txt"
         ],
         "screenshot": "docs/screenshots/xfce-nttest.png",
-        "sha256": "3dd34debb50e00fb5d7e6df3de86bce1621aa47d4393ea9aefe4787dfda22206"
+        "sha256": "7ea2d8b7195a911ad4a814e7423b8dd0ad8868707a4fba39ad1b482c8e0b5839"
       },
       {
         "commands": [
@@ -242,7 +236,7 @@
           "ls"
         ],
         "screenshot": "docs/screenshots/xfce-system32.png",
-        "sha256": "a57abcaa02eefe979be92d2518fb81e99868c5d8ad0d410de43d0e1a1a3ce4e5"
+        "sha256": "b9e007bce295e97dc7081c7e9824daf056b7c8aa1abe609d9c5dfc3385294b69"
       },
       {
         "commands": [
@@ -251,28 +245,28 @@
           "ls"
         ],
         "screenshot": "docs/screenshots/xfce-drivers.png",
-        "sha256": "b507ca4511e480c64119a4689d0d498558fa23f81e7ab7f4f56213e79d45d72c"
+        "sha256": "9ea7f99d042ae97ae5414aa9138a921ac08833b417a377795199e8836fc2440b"
       },
       {
         "commands": [
           "lsmod -a"
         ],
         "screenshot": "docs/screenshots/xfce-nt-modules.png",
-        "sha256": "70f613df2db8fa438f8bf78dc5b33ace833a91930bcef3d27b2fd77a7e028a17"
+        "sha256": "7517c8778d083370b40ee6971967da3a8674ae0948b20c3f25b14e9727d4f657"
       },
       {
         "commands": [
           "nttest cm"
         ],
         "screenshot": "docs/screenshots/xfce-registry.png",
-        "sha256": "c340c200daad08b6a8b998ddd17c88dc9dd5d27ffb25e8d2900208ac5eb5d3a1"
+        "sha256": "1602edda20e520aaa6cc42508fbc4df0585800a1e8c8f880c35b53d31644b31b"
       },
       {
         "commands": [
           "nttest se"
         ],
         "screenshot": "docs/screenshots/xfce-security.png",
-        "sha256": "4861f6752d00b52348317c696bb2ee08944d4dac4145d3420dbe8ccf7adab157"
+        "sha256": "8b15abe021b0ced6b04d5f1a8ce39c58f9c47dd11362517cbabcea2c99040159"
       },
       {
         "commands": [
@@ -280,8 +274,746 @@
           "head -n 8 /tmp/ps-capture.txt"
         ],
         "screenshot": "docs/screenshots/xfce-nt-processes.png",
-        "sha256": "ba64fe2df6d94070df4c06c0fa64ce697924e6ce184e674dad8c9d412fa6f641"
+        "sha256": "37f864457ef99d539654702f60f5ef62ee0f44d819ca933205552fcc6d464715"
+      },
+      {
+        "commands": [
+          "ps aux | head -n 22"
+        ],
+        "screenshot": "docs/screenshots/xfce-ps.png",
+        "sha256": "df79a17408026925fd267132e5a3fabc881d412f9b80746ba9860c96271bdd87"
+      },
+      {
+        "commands": [
+          "for f in /WINDOWS/system32/ntoskrnl.exe /WINDOWS/system32/drivers/disk.sys /lib/modules/rtl8139.sys /bin/busybox /usr/bin/xfwm4; do printf \"%-38s %s\\n\" $f \"$(head -c 4 $f | od -An -c | tr -s \" \")\"; done",
+          "lsmod -a | head -n 3; ls /lib/ld-musl-i386.so.1 /usr/lib/libgtk-3.so.0; ls /proc 2>&1 | head -1"
+        ],
+        "screenshot": "docs/screenshots/xfce-nt-linux.png",
+        "sha256": "bdfea68d137e6e14520155471d5bcb041b3c5098c69ab84e9357bb5ca39607bb"
       }
     ]
+  },
+  "prior_chromium_report": {
+    "status": "unverified",
+    "reported": {
+      "variant": "chromium",
+      "boot_device": "ide",
+      "image_sha256": "4fe4ba285907b3cc95f7464cf561a1d97a7cbbe6f5b4bdf2e4f4a8e28be00789",
+      "passed": true,
+      "suites": [
+        9,
+        9,
+        0
+      ],
+      "tests": [
+        54,
+        54,
+        0
+      ],
+      "exit_code": 0,
+      "kernel_tests_passed": true,
+      "ps_aux_exit_code": 0,
+      "x11_transport_ready": true,
+      "swiftshader_probe_exit_code": 0,
+      "chromium_headless_exit_code": 0,
+      "chromium_headless_dom_marker": "NT51_JS_RESULT_42_71",
+      "chromium_window_title": "Yahoo | Mail, Weather, Search, Politics, News, Finance, Sports & Videos - Chromium",
+      "netd_ready": true,
+      "netd_tcp_connects": 39,
+      "visible_xfce_windows": {
+        "top_panel": 1,
+        "bottom_panel": 1,
+        "terminal": 1,
+        "desktop": 1,
+        "chromium": 1
+      },
+      "xfce_desktop_ready": true,
+      "screenshot": "docs/screenshots/xfce-chromium.png",
+      "screenshot_sha256": "33ab3ece1172532611e14dc303b94201c0108a64b11fdb809aaa993c033410ee"
+    },
+    "review_findings": [
+      "The launch script replaced a killed headless browser exit status with zero. That reported exit code does not establish a clean browser exit.",
+      "The headless test used the user-agent substring position, not the documented addition 30 + 41.",
+      "The top-level Windows verification date predates the supplied Chromium screenshot. No original Chromium serial log is present in this worktree.",
+      "A browser title, rendered pixels and TCP connect attempts alone do not prove successful certificate validation."
+    ]
+  },
+  "review_2026_10_17": {
+    "date": "2026-10-17",
+    "status": "completed_with_limitations",
+    "chromium_rebuilt": false,
+    "build_log": "runtime/review/build.log",
+    "notes": [
+      "Headless success requires computed DOM, raw exit status zero, and timeout flag zero. Killed or timed-out processes cannot be substituted for successful runs.",
+      "musl i386 thread stack fields at words 13/14 are updated without overwriting allocation ownership at words 11/12. Thread slots are claimed atomically; native stacks are reused only after NT termination. Unmapped TLS and child-TID pointers are cleared.",
+      "Adapter and driver failures propagate instead of supplying guessed hardware identity. Fixed QEMU network configuration is reported as read-only. DNS/ICMP replies are validated; netd records actual established TCP connections and received payload.",
+      "Registry enumeration creates and verifies its own volatile value instead of passing when an optional setup key is absent.",
+      "The GUI probe requires mapped XFCE components, a Yahoo browser title, and varied pixels in multiple webpage rows. These observations do not establish TLS security or identify the renderer.",
+      "The 14 host tests include explicit NT/X11 mocks and a 16000-lifecycle thread-slot stress test; they are not guest runtime evidence. Guest test results are recorded separately.",
+      "Superseded by the 2026-10-18 current_review. docs/screenshots/verified-xfce.png and verified-chromium.png were replaced on 2026-10-18; the hashes in this record identify the earlier captures (verified-minimal.png is unchanged)."
+    ],
+    "prebuilt_chromium_sha256": {
+      "chrome": "3d1f05e26d6ae4ca9e4c96e13153730f4073a388261a73d5c1b34bf4f3758ac3",
+      "headless_shell": "0f023206df1e4ba216539f8554ac3bf31795b5b85d4ef4a502cfb35822665693"
+    },
+    "regression_tests": {
+      "run": 14,
+      "passed": 14,
+      "guest_runtime_evidence": false,
+      "command": "python -m unittest discover -s tests -p 'test_*.py'"
+    },
+    "kernel_image": {
+      "path": "bazel-bin/external/+nt51_repository+nt51/Source/XPSP1/NT/base/ntos/ntoskrnl.exe",
+      "format": "PE32 native i386",
+      "runtime_verified": true,
+      "bytes": 1918080,
+      "sha256": "8183c52fc5a68bf39e50bc53fec97bb6f71eec436887d8f0e7142b878ca98cdf"
+    },
+    "historical_screenshot_hash_audit": [
+      {
+        "path": "docs/screenshots/xfce-lsmod.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "522e2cab0459e0cf0c7c34dfc63466138315d92ae3af2da5bcb454fbe844bd4f"
+      },
+      {
+        "path": "docs/screenshots/xfce-uname.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "8ab3f944384debb433458a0f0cd97a1d285714b9836926d5187f809ce1e5293a"
+      },
+      {
+        "path": "docs/screenshots/xfce-nttest.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "3dd34debb50e00fb5d7e6df3de86bce1621aa47d4393ea9aefe4787dfda22206"
+      },
+      {
+        "path": "docs/screenshots/xfce-system32.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "a57abcaa02eefe979be92d2518fb81e99868c5d8ad0d410de43d0e1a1a3ce4e5"
+      },
+      {
+        "path": "docs/screenshots/xfce-drivers.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "b507ca4511e480c64119a4689d0d498558fa23f81e7ab7f4f56213e79d45d72c"
+      },
+      {
+        "path": "docs/screenshots/xfce-nt-modules.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "70f613df2db8fa438f8bf78dc5b33ace833a91930bcef3d27b2fd77a7e028a17"
+      },
+      {
+        "path": "docs/screenshots/xfce-registry.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "c340c200daad08b6a8b998ddd17c88dc9dd5d27ffb25e8d2900208ac5eb5d3a1"
+      },
+      {
+        "path": "docs/screenshots/xfce-security.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "4861f6752d00b52348317c696bb2ee08944d4dac4145d3420dbe8ccf7adab157"
+      },
+      {
+        "path": "docs/screenshots/xfce-nt-processes.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "ba64fe2df6d94070df4c06c0fa64ce697924e6ce184e674dad8c9d412fa6f641"
+      },
+      {
+        "path": "docs/screenshots/xfce-chromium.png",
+        "matches_reported_hash": true,
+        "actual_sha256": "33ab3ece1172532611e14dc303b94201c0108a64b11fdb809aaa993c033410ee"
+      }
+    ],
+    "chromium_source_check": {
+      "revision": "3bb54dbfa29e4506909fb9d289ad1a28ab76fceb",
+      "official_source": "https://chromium.googlesource.com/chromium/src/+/3bb54dbfa29e4506909fb9d289ad1a28ab76fceb",
+      "version": "158.0.8107.0",
+      "patch_applies_to_revision": true,
+      "prebuilt_binary_source_provenance_verified": false,
+      "metadata": "runtime/review/chromium-source-commit.json"
+    },
+    "build": {
+      "passed": true,
+      "targets": [
+        "//:kernel_bundle",
+        "//:minimal_image",
+        "//:xfce_image",
+        "//:chromium_image"
+      ],
+      "fresh_build_log": "runtime/review/build.log",
+      "boot_log": "runtime/review/boot-build.log",
+      "boot_support_seconds": 973.6816532611847,
+      "final_build_log": "runtime/review/final-build.log",
+      "final_chromium_build_log": "runtime/review/final-chromium-build.log",
+      "pe_validation": "runtime/review/pe-validation.json",
+      "chromium_rebuilt": false
+    },
+    "all_ide_variants_passed": true,
+    "all_boot_modes_passed": false,
+    "guest_runs": [
+      {
+        "variant": "minimal",
+        "boot_device": "ide",
+        "image_sha256": "ab6b887fe372269de7a72260026df773f5a85ae61a89089ff196f38dc2242fd7",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "serial_log": "runtime/minimal/serial.log",
+        "screenshot": "runtime/minimal/screen.png",
+        "screenshot_sha256": "deae088d5e6de2430a3a16530639835dbadb287f7955e376fcf01e3e22d6c3b8"
+      },
+      {
+        "variant": "minimal",
+        "boot_device": "usb",
+        "image_sha256": "ab6b887fe372269de7a72260026df773f5a85ae61a89089ff196f38dc2242fd7",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "serial_log": "runtime/minimal-usb/serial.log",
+        "screenshot": "runtime/minimal-usb/screen.png",
+        "screenshot_sha256": "deae088d5e6de2430a3a16530639835dbadb287f7955e376fcf01e3e22d6c3b8"
+      },
+      {
+        "variant": "xfce",
+        "boot_device": "ide",
+        "image_sha256": "b5288428517b6d221047dbaf1c5b13ce920f6d1d5b5dbdcc6266da655645cc06",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1
+        },
+        "xfce_desktop_ready": true,
+        "serial_log": "runtime/xfce/serial.log",
+        "screenshot": "runtime/xfce/screen.png",
+        "screenshot_sha256": "5bbc037be66a5faa269df37a714c6c4d3f5593c2fdcd6f4cbfbf4325007d05e5"
+      },
+      {
+        "variant": "xfce",
+        "boot_device": "usb",
+        "image_sha256": "b5288428517b6d221047dbaf1c5b13ce920f6d1d5b5dbdcc6266da655645cc06",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1
+        },
+        "xfce_desktop_ready": true,
+        "serial_log": "runtime/xfce-usb/serial.log",
+        "screenshot": "runtime/xfce-usb/screen.png",
+        "screenshot_sha256": "af35a6be1f4c8f3a426247e62ecc4e3b5f116350e24006fa8b76ff82b89dd9e1"
+      },
+      {
+        "variant": "chromium",
+        "boot_device": "ide",
+        "image_sha256": "e33a89314913ee22c31e156d9a87b9259f7f43380a4a8b817757cd19ca9ef9b9",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "swiftshader_probe_exit_code": 0,
+        "chromium_headless_exit_code": 0,
+        "chromium_headless_timed_out": 0,
+        "chromium_headless_dom_marker": "NT51_JS_RESULT_42_71",
+        "chromium_headless_dom_valid": true,
+        "chromium_window_title": "Yahoo | Mail, Weather, Search, Politics, News, Finance, Sports & Videos - Chromium",
+        "netd_ready": true,
+        "netd_tcp_connects": 29,
+        "netd_tcp_established": 29,
+        "netd_tcp_received_data": 28,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1,
+          "chromium": 1
+        },
+        "xfce_desktop_ready": true,
+        "serial_log": "runtime/chromium/serial.log",
+        "screenshot": "runtime/chromium/screen.png",
+        "screenshot_sha256": "b7bde862a8526489f3ee1f79271ec19753efc8809ee68929522265f9ec9c15b8"
+      },
+      {
+        "variant": "chromium",
+        "boot_device": "usb",
+        "image_sha256": "e33a89314913ee22c31e156d9a87b9259f7f43380a4a8b817757cd19ca9ef9b9",
+        "passed": false,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "error": "Chromium launcher unavailable: browser assets require the IDE disk transport",
+        "serial_log": "runtime/chromium-usb/serial.log",
+        "screenshot": "runtime/chromium-usb/screen.png",
+        "screenshot_sha256": "0559325e336da4ad816b3171067d74c4254b3cd43f9a8342624bd326bb902b37"
+      }
+    ],
+    "matrix": "runtime/review/final-matrix.json",
+    "limitations": [
+      "Chromium browser assets require IDE disk transport. The extra USB run boots NT and passes kernel tests, but browser verification fails because the assets are unavailable.",
+      "The experimental compatibility layer remains incomplete. Its getrandom fallback is noncryptographic and the Chromium compatibility library suppresses C++ exit callbacks.",
+      "Chromium binaries were not rebuilt; official revision/version and patch application checks do not independently establish binary source provenance."
+    ],
+    "screenshots": [
+      {
+        "path": "docs/screenshots/verified-minimal.png",
+        "sha256": "deae088d5e6de2430a3a16530639835dbadb287f7955e376fcf01e3e22d6c3b8"
+      },
+      {
+        "path": "docs/screenshots/verified-xfce.png",
+        "sha256": "5bbc037be66a5faa269df37a714c6c4d3f5593c2fdcd6f4cbfbf4325007d05e5"
+      },
+      {
+        "path": "docs/screenshots/verified-chromium.png",
+        "sha256": "b7bde862a8526489f3ee1f79271ec19753efc8809ee68929522265f9ec9c15b8"
+      }
+    ]
+  },
+  "chromium_rebuild": {
+    "source_commit": "7cc9d0d833549df75d31f9049130b05e3d1c9f84",
+    "version": "158.0.8107.0",
+    "build_exit_code": 0,
+    "build_log": "runtime/chromium-rebuild/build.log",
+    "provenance_manifest": "chromium_rootfs/pkg/opt/chromium-build.json",
+    "provenance_manifest_sha256": "106e6ed2aa66907f8891ca38ed9ba6e14ecd027ebf61ee01da396af2184dda6f",
+    "installed_artifacts_match_manifest": true,
+    "image_rootfs_artifacts_match_manifest": true,
+    "previous_artifact_sha256": {
+      "vk_swiftshader_icd.json": "e59313db52776f21c28b90042382978af2867b8bfbab0d852195b92566b4b30e",
+      "libvk_swiftshader.so": "ba547966969a62288d63f7d0953918fcb9bd2d4184b0e7e6a3d57d1ad93e0cc4",
+      "icudtl.dat": "02a01b3188b6a41a756f7322fdb5e6b5ca6573b327b01dfc8ed662d571a6f769",
+      "headless_lib_strings.pak": "ec334e18a447e17d5f306f6ea0f6685e9c62a2b36e0e6e9cbe357307201839b3",
+      "chrome_100_percent.pak": "b07c7f1c0c2c58d02a04613b1f5bc651eb3aaa59d174a6009a096299f99e141b",
+      "v8_context_snapshot.bin": "fe78970af63f098586481d4805f2c5971afa651f9c634c930bf650d5ffe7a338",
+      "chrome": "3d1f05e26d6ae4ca9e4c96e13153730f4073a388261a73d5c1b34bf4f3758ac3",
+      "libvulkan.so.1": "de1611f9b397063ae6a695caa1a39f965e9f26e0910d29061f79a9852610f7df",
+      "libGLESv2_test.so": "a8eb2e2e201cb6c651464d6249a678f67885bf33d94cfe9db81c7eb3bf6c6157",
+      "headless_command_resources.pak": "94ebb19b9286f13057723ec643659711ab53a5011ac4f4a0679fa450930a4586",
+      "chrome_200_percent.pak": "2cb34e2f01fc520a9fd8d9faa0da0d89c0dfe6ffb7f48c83df0258d7ccf42ba1",
+      "headless_shell": "0f023206df1e4ba216539f8554ac3bf31795b5b85d4ef4a502cfb35822665693",
+      "headless_lib_data.pak": "be0f8cee0b7dcfe6d52d36ddfacdb8aa67628f12a840e4516cb8319fef98355f",
+      "libEGL.so": "d3d0032ab72d647cdd1c3e891c6bfe2b59c5414d37c38403526dd117124ef632",
+      "resources.pak": "beb0a94c0ea4c58b065b656523ba46ff9c7faa2a9927c8ab571456795fbd3843",
+      "locales/en-US.pak": "8c502945ddcdf6489efa611b049bb720b7ead7bdfffbc0b9626f44e2ec443820"
+    },
+    "rebuilt_elf_sha256": {
+      "chrome": "0646e76fd3d5d71e20764bad40813e3c95c61c70814181052d71be1391d0b7a2",
+      "headless_shell": "3ccd7944341e5d620fd265be0668a90d99fc3fa2206560977e55cadaf4626125",
+      "libEGL.so": "d547ecdcefa73421c6149c4d1e4c5f98de4f3cfe01c849866154a36cac1a761b",
+      "libGLESv2_test.so": "a0eef10d20ca05b2a4facf4203367efff9f4853ffba51bbc9f09abca0df95bf8",
+      "libvk_swiftshader.so": "4755bb74b2faf29c67f2bd246e484df31076a1a17d53d698e80bfe1075028052",
+      "libvulkan.so.1": "2adeb0950cf66b4b371e6ca8ffb47c4367e4c60b0ea3e9cc8254445a8bedb3c4"
+    },
+    "artifact_privacy_scan_passed": true,
+    "signature_scan_note": "No personal identifiers or build-machine identifiers were found in the scanned artifacts. Required upstream notices and functional vendor strings are retained.",
+    "image_build_passed": true,
+    "image_build_log": "runtime/chromium-rebuild/image-build.log",
+    "regression_tests": {
+      "run": 14,
+      "passed": 14,
+      "log": "runtime/chromium-rebuild/host-tests.log"
+    },
+    "ide_boot": {
+      "variant": "chromium",
+      "boot_device": "ide",
+      "image_sha256": "f62cfd9a146f7aa5bb461d9934135f16d3f58fe1d736015d7a556725b194c8e1",
+      "passed": true,
+      "suites": [
+        9,
+        9,
+        0
+      ],
+      "tests": [
+        54,
+        54,
+        0
+      ],
+      "exit_code": 0,
+      "kernel_tests_passed": true,
+      "ps_aux_exit_code": 0,
+      "x11_transport_ready": true,
+      "swiftshader_probe_exit_code": 0,
+      "chromium_headless_exit_code": 0,
+      "chromium_headless_timed_out": 0,
+      "chromium_headless_dom_marker": "NT51_JS_RESULT_42_71",
+      "chromium_headless_dom_valid": true,
+      "chromium_window_title": "Yahoo | Mail, Weather, Search, Politics, News, Finance, Sports & Videos - Chromium",
+      "netd_ready": true,
+      "netd_tcp_connects": 28,
+      "netd_tcp_established": 28,
+      "netd_tcp_received_data": 26,
+      "visible_xfce_windows": {
+        "top_panel": 1,
+        "bottom_panel": 1,
+        "terminal": 1,
+        "desktop": 1,
+        "chromium": 1
+      },
+      "xfce_desktop_ready": true
+    },
+    "serial_log": "runtime/chromium-rebuild/verified-run/serial.log",
+    "serial_log_sha256": "86cd29d968c0adccc5125d32cf11f1a5ac2de7ffbbceb079868aec958397782d",
+    "screenshot": "docs/screenshots/chromium-rebuild.png",
+    "screenshot_sha256": "d74ba0e05aeb05dd230dc94a1e3577a6938d5b8da8e6981ca3c56793dd0750ff",
+    "limitations": [
+      "Chromium browser assets still require IDE storage; Chromium USB browser verification remains unsupported.",
+      "Browser pixels, title and received data do not independently prove TLS certificate validation.",
+      "The compiler, sysroot and toolchain dependencies were not bootstrapped from source."
+    ]
+  },
+  "sanitization": {
+    "scope": "Repository files and bundled artifacts",
+    "license_metadata": {
+      "command": "reuse lint",
+      "passed": true,
+      "files_covered": 313
+    },
+    "privacy_scan": {
+      "command": "python3 tools/audit_privacy.py --json",
+      "passed": true,
+      "files_checked": 318,
+      "findings": {}
+    },
+    "parent_commit_privacy_scan_passed": true,
+    "screenshot_text_scan": {
+      "screenshots_checked": 17,
+      "passed": true,
+      "findings": {},
+      "method": "OCR text scan; not a guarantee against all visual disclosures"
+    },
+    "regression_tests": {
+      "run": 20,
+      "passed": 20
+    },
+    "image_packaging": {
+      "build_passed": true,
+      "license_notices_verified": true,
+      "chromium_artifact_hashes_unchanged": true,
+      "images": {
+        "minimal": {
+          "path": "bazel-bin/minimal_rootfs/usb_image.files/minimal_usb.img",
+          "sha256": "ea4264b7be1d52d59d85c5ea641744dbf9979305243e923e323492b467de4737"
+        },
+        "xfce": {
+          "path": "bazel-bin/rootfs/usb_image.files/xfce_usb.img",
+          "sha256": "a1676b43430b05025874a58e2792152e434eb08da7c5def37188af26c5244b0a"
+        },
+        "chromium": {
+          "path": "bazel-bin/chromium_rootfs/usb_image.files/chromium_usb.img",
+          "sha256": "acb93bf45f37461f3c97daefcc5ac8cf35c4abdff619f1d40ddd8550887a9e47"
+        }
+      },
+      "boot_repeated": false,
+      "note": "Existing runtime records apply to the images identified by their hashes. This packaging update adds license notices and sanitized metadata; the verified Chromium artifacts are unchanged."
+    }
+  },
+  "current_review": {
+    "date": "2026-10-18",
+    "status": "completed_with_limitations",
+    "chromium_rebuilt": false,
+    "build": {
+      "passed": true,
+      "targets": [
+        "//:minimal_image",
+        "//:xfce_image",
+        "//:chromium_image"
+      ],
+      "host": "Linux, Bazel, LLVM, Wine and wibo"
+    },
+    "regression_tests": {
+      "run": 21,
+      "passed": 21,
+      "guest_runtime_evidence": false,
+      "command": "python3 -m unittest discover -s tests -p 'test_*.py'"
+    },
+    "all_ide_variants_passed": true,
+    "usb_variants_passed": true,
+    "guest_runs": [
+      {
+        "variant": "minimal",
+        "boot_device": "ide",
+        "image_sha256": "c7d9136f0e4681d2c6ab288ba1480e057e6de6b83ebdb71f9923f50f2325f794",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "serial_log": "runtime/minimal/serial.log"
+      },
+      {
+        "variant": "minimal",
+        "boot_device": "usb",
+        "image_sha256": "c7d9136f0e4681d2c6ab288ba1480e057e6de6b83ebdb71f9923f50f2325f794",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "serial_log": "runtime/minimal-usb/serial.log"
+      },
+      {
+        "variant": "xfce",
+        "boot_device": "ide",
+        "image_sha256": "7e9540c2d2704e332659a905950600218184dd20b539800b3fb3575adff97126",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1
+        },
+        "xfce_desktop_ready": true,
+        "serial_log": "runtime/xfce/serial.log"
+      },
+      {
+        "variant": "xfce",
+        "boot_device": "usb",
+        "image_sha256": "7e9540c2d2704e332659a905950600218184dd20b539800b3fb3575adff97126",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1
+        },
+        "xfce_desktop_ready": true,
+        "serial_log": "runtime/xfce-usb/serial.log"
+      },
+      {
+        "variant": "chromium",
+        "boot_device": "ide",
+        "image_sha256": "67e39edede78481c33ebc7fc4e12389a6c2bb7b504276acde9db42814fea1e34",
+        "passed": true,
+        "suites": [
+          9,
+          9,
+          0
+        ],
+        "tests": [
+          54,
+          54,
+          0
+        ],
+        "exit_code": 0,
+        "kernel_tests_passed": true,
+        "ps_aux_exit_code": 0,
+        "x11_transport_ready": true,
+        "swiftshader_probe_exit_code": 0,
+        "chromium_headless_exit_code": 0,
+        "chromium_headless_timed_out": 0,
+        "chromium_headless_dom_marker": "NT51_JS_RESULT_42_71",
+        "chromium_headless_dom_valid": true,
+        "chromium_window_title": "Yahoo | Mail, Weather, Search, Politics, News, Finance, Sports & Videos - Chromium",
+        "netd_ready": true,
+        "netd_tcp_connects": 24,
+        "netd_tcp_established": 24,
+        "netd_tcp_received_data": 22,
+        "visible_xfce_windows": {
+          "top_panel": 1,
+          "bottom_panel": 1,
+          "terminal": 1,
+          "desktop": 1,
+          "chromium": 1
+        },
+        "xfce_desktop_ready": true,
+        "serial_log": "runtime/chromium/serial.log"
+      }
+    ],
+    "input_checks": {
+      "method": "QMP send-key and input-send-event (relative motion, buttons, wheel) into the emulated PS/2 keyboard and IntelliMouse; the same QEMU input path the SDL window uses",
+      "ps2_mouse_packet_size": 4,
+      "minimal_shell": {
+        "commands": [
+          "expr 137 - 29",
+          "echo hello | grep h; echo x | head -1; echo rc=$?",
+          "grep -c root /etc/passwd; ls /WINDOWS/system32 | grep -i -e ntoskrnl -e hal",
+          "ls /WINDOWS/system32/drivers | grep -c sys; busybox --list | wc -l",
+          "lsmod -a | grep -i -e ntoskrnl -e hal -e rtl"
+        ],
+        "observed": [
+          "108",
+          "hello, x, rc=0",
+          "1; hal.dll, ntoskrnl.exe",
+          "22; 276",
+          "ntoskrnl.exe, hal.dll and rtl8139.sys loaded"
+        ]
+      },
+      "xfce": [
+        "Mouse motion and a left click focused the terminal; typed commands executed (captures below)"
+      ],
+      "chromium": [
+        "Wheel down 4 clicks scrolled yahoo.com to later stories; wheel up 4 clicks returned to the top",
+        "Left click on the Yahoo search field opened its search overlay; typed \"NT kernel\" appeared",
+        "Clicking the XFCE taskbar Terminal button raised the terminal over Chromium"
+      ]
+    },
+    "fixes": [
+      "PS/2 driver (rootfs, chromium_rootfs): enables the IntelliMouse wheel (200/100/80 sample-rate sequence, ID 3) and parses 4-byte packets; the wheel delta is carried in Buttons bits 8-15.",
+      "X11 framebuffer bridge: wheel deltas become XTEST button 4/5 clicks; only bits 0-2 are compared as button state.",
+      "Chromium RAM disk enlarged to 192 MiB: with 128 MiB the GUI profile could not create its ProcessSingleton socket directory and Chromium aborted after the headless check.",
+      "In-process vfork (all shims): each exited child is recorded for wait4, so pipelines no longer reuse one PID and report status 255.",
+      "In-process applet exec (all shims): musl stdio state, bb_common_bufsiz1 and xfunc_error_retval are reset as after a real exec, and restored for the parent. grep previously reused stale patterns and head/grep saw a stale stdin EOF.",
+      "Minimal shim: vfork snapshots the whole descriptor table with per-child handle and pipe-end references (refcounted pipes, 4 MiB on-demand buffers), fixing \"can't duplicate file descriptor\" and Broken pipe in every pipeline.",
+      "TCGETS returns ENOTTY for pipes, sockets, /dev/null and files, including redirected stdin/stdout/stderr, so ls no longer emits terminal columns and colors into pipes.",
+      "mremap copies data whenever the new mapping succeeds, not only when the address is below 2 GiB.",
+      "mmap failure in the Chromium shim prints a one-time NT address-space summary (free, largest free block, commit/reserve) for diagnosis."
+    ],
+    "limitations": [
+      "A 2 GiB user address space bounds single-process Chromium. An earlier long session hit STATUS_NO_MEMORY on 3.4 MiB reservations; the final runs, including repeated scrolling, had no mapping failures. /3GB boot was tried and faults in NTLDR during the kernel hand-off, so it is not used.",
+      "Chromium GUI uses CPU rendering; repaint after scrolling or typing takes several seconds.",
+      "Chromium browser assets still require IDE attachment; USB browser verification is unsupported.",
+      "Input checks used QMP injection rather than a person at the SDL window; both feed QEMU's emulated PS/2 devices."
+    ],
+    "screenshots": [
+      {
+        "path": "docs/screenshots/verified-minimal.png",
+        "sha256": "deae088d5e6de2430a3a16530639835dbadb287f7955e376fcf01e3e22d6c3b8"
+      },
+      {
+        "path": "docs/screenshots/minimal-shell.png",
+        "sha256": "98281ed7fab035a038eb58b4b71c60edb2d076cd15d528212f70564ca9e6bde4"
+      },
+      {
+        "path": "docs/screenshots/verified-xfce.png",
+        "sha256": "6436c82c89f4ec1a4284c5fdf87abc996cd702d401ebfb1c656c92f63d1bf8f6"
+      },
+      {
+        "path": "docs/screenshots/xfce-nt-linux.png",
+        "sha256": "bdfea68d137e6e14520155471d5bcb041b3c5098c69ab84e9357bb5ca39607bb"
+      },
+      {
+        "path": "docs/screenshots/verified-chromium.png",
+        "sha256": "843cb0beb13e0489857f3ed463d222199ab0bd51be40d508d3f9d68a2239f439"
+      },
+      {
+        "path": "docs/screenshots/chromium-scroll-down.png",
+        "sha256": "ed04aa9dec79917deb256ca65ea8e5cee65c2d8036a4e37120ca93df594ab216"
+      },
+      {
+        "path": "docs/screenshots/chromium-scroll-up.png",
+        "sha256": "96cdf9c5ffd33a94d23fb0ab699b38c2a495f8576932c69fdc195f31f90df310"
+      },
+      {
+        "path": "docs/screenshots/chromium-typing.png",
+        "sha256": "bcb4cc7df0f7fef921e5235e9fe6614d9b9bdff2d43ce56b8f662d69799f6864"
+      }
+    ],
+    "screenshot_note": "Location lines in Yahoo's weather and events cards (the host's geolocated city) are masked with white boxes in verified-chromium.png, xfce-chromium.png and chromium-scroll-up.png; the captures are otherwise unedited."
   }
 }

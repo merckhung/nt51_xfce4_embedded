@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 module(name = "nt51_xfce4_embedded", version = "0.1.0")
+bazel_dep(name = "platforms", version = "1.0.0")
 
 nt51_repository = use_repo_rule("//bazel:repositories.bzl", "nt51_repository")
 nt51_repository(
     name = "nt51",
     remote = "https://github.com/vipinkiruba/kernel-NT5.1.git",
     commit = "1b390dddff9fe017e9c11a7845c67a887c3483dc",
-    patches = ["//patches:nt51-bazel.patch"],
+    patches = ["//patches:nt51-bazel.patch", "//patches:nt51-mc-paths.patch"],
 )
 
 release_repository = use_repo_rule("//bazel:repositories.bzl", "release_repository")

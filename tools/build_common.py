@@ -8,15 +8,46 @@ def load(path,name):
 
 
 def run(args,cwd=None,env=None):
-    result=subprocess.run([str(a) for a in args],cwd=cwd,env=env,capture_output=True,text=True,errors='replace')
+    cmd=[str(a) for a in args]
+    if os.name!='nt' and cmd and cmd[0].lower().endswith('.exe'):
+        linker=Path(cmd[0]).name.lower()=='link.exe'
+        runner=(os.environ.get('WINE') or shutil.which('wine')) if linker else (os.environ.get('WIBO') or shutil.which('wibo'))
+        if not runner: raise RuntimeError('Required tool missing: '+('wine' if linker else 'wibo')+' (set WINE/WIBO or PATH)')
+        base=str(cwd or os.getcwd())
+        prefixes=('/I','/Fo','/Fp','/Tc','/Tp','/OUT:','/DEF:','/IMPLIB:','/PDB:','/MAP:')
+        converted=[runner,cmd[0]]
+        for a in cmd[1:]:
+            matched=False
+            for p in prefixes:
+                if a.startswith(p) and a[len(p):].startswith('/'):
+                    converted.append(p+os.path.relpath(a[len(p):],base))
+                    matched=True
+                    break
+            if not matched:
+                if a.startswith('/') and '/' in a[1:] and (Path(a).exists() or Path(a).parent.exists()):
+                    converted.append(os.path.relpath(a,base))
+                else:
+                    converted.append(a)
+        cmd=converted
+        env=(env or os.environ).copy()
+        env['PATH']=str(Path(args[0]).parent)+':'+env.get('PATH','').replace(';',':')
+        if linker:
+            env['WINEDEBUG']='-all'
+            env.setdefault('WINEPREFIX',str(Path.home()/'.cache/nt51-wine-prefixes/manual'))
+    # Wine's service processes may inherit stdout and outlive the compiler.
+    # A file lets us wait for the tool itself without waiting for pipe EOF.
+    with tempfile.TemporaryFile(mode='w+',encoding='utf-8',errors='replace') as stream:
+        result=subprocess.run(cmd,cwd=cwd,env=env,stdout=stream,stderr=subprocess.STDOUT)
+        stream.seek(0);output=stream.read()
     if result.returncode:
-        raise RuntimeError('Command failed: '+str(args)+'\n'+result.stdout+'\n'+result.stderr)
-    return result.stdout+result.stderr
+        raise RuntimeError('Command failed: '+str(cmd)+'\n'+output)
+    return output
 
 
 def tool(name):
     root=os.environ.get('LLVM_ROOT')
-    found=str(Path(root)/'bin'/(name+'.exe')) if root else shutil.which(name)
+    suffix='.exe' if os.name=='nt' else ''
+    found=str(Path(root)/'bin'/(name+suffix)) if root else shutil.which(name)
     if not found or not Path(found).is_file(): raise RuntimeError('Required tool missing: '+name+' (set LLVM_ROOT or PATH)')
     return found
 

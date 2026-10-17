@@ -30,7 +30,10 @@ def extract_alpine(archives,root):
     return links,hardlinks
 
 def build(cfg,out,project,nt):
-    xfce=cfg['operation']=='xfce_image';variant='rootfs' if xfce else 'minimal_rootfs'
+    op=cfg['operation']
+    chromium=op=='chromium_image'
+    xfce=op in ('xfce_image','chromium_image')
+    variant='chromium_rootfs' if chromium else ('rootfs' if xfce else 'minimal_rootfs')
     deps=[Path(f).resolve() for f in cfg['deps']]
     system=next(f for f in deps if f.name=='system.files')
     native=next(f for f in deps if f.name=='native.files')
@@ -64,6 +67,20 @@ def build(cfg,out,project,nt):
     if xfce:
         links['usr/bin/x11_fb_bridge']='/bin/busybox'
         links['usr/bin/xfce-probe']='/bin/busybox'
+    if chromium:
+        links['usr/bin/netd']='/bin/busybox'
+    if chromium:
+        (root/'lib').mkdir(parents=True,exist_ok=True)
+        (root/'opt/chromium').mkdir(parents=True,exist_ok=True)
+        shutil.copy2(system/'libgcompat.so',root/'lib/libgcompat.so')
+        links['lib/ld-linux.so.2']='/lib/libgcompat.so'
+        links['lib/libresolv.so.2']='/lib/ld-musl-i386.so.1'
+        shutil.copy2(system/'swiftshader_probe',root/'opt/chromium/swiftshader_probe')
+        pkg_dir=project/'chromium_rootfs/pkg'
+        if pkg_dir.is_dir():
+            shutil.copytree(pkg_dir,root,dirs_exist_ok=True)
+        if (root/'opt/chromium/libGLESv2_test.so').is_file():
+            links['opt/chromium/libGLESv2.so']='/opt/chromium/libGLESv2_test.so'
     # All enabled BusyBox applets can be invoked through a filesystem path.
     import re
     header=(project/variant/'busybox-config/applet_tables.h').read_text()
@@ -75,28 +92,60 @@ def build(cfg,out,project,nt):
     (out/'rootfs-manifest.json').write_text(json.dumps(files,indent=2)+'\n')
     mbr=parse_c_byte_array(nt/'base/boot/bootcode/mbr/i386/bootmbr.h','x86BootCode')
     fat=parse_c_byte_array(nt/'base/boot/bootcode/fat/i386/bootfat.h','FatBootCode')
-    def populate(vol):
+    def populate(vol,skip_opt_chromium=False):
         for f in sorted(root.rglob('*')):
-            if f.is_dir():vol.mkdir(f.relative_to(root).as_posix())
-            elif f.is_file():vol.add_host_file(f.relative_to(root).as_posix(),str(f))
+            rel=f.relative_to(root).as_posix()
+            if skip_opt_chromium and f.is_file() and rel.startswith('opt/chromium/'):continue
+            if f.is_dir():vol.mkdir(rel)
+            elif f.is_file():vol.add_host_file(rel,str(f))
         for _ in range(4):
             for dest,source in sorted({**hardlinks,**links}.items()):
+                if skip_opt_chromium and dest.startswith('opt/chromium/'):continue
                 if dest.upper() in vol.file_map:continue
                 target=source.strip('/') if source.startswith('/') else posixpath.normpath(posixpath.join(posixpath.dirname(dest),source)).strip('/')
                 if target.upper() in vol.file_map:vol.add_link(dest,target)
-    rd_sectors=262144 if xfce else 131072
-    rd=Fat16Volume(total_sectors=rd_sectors,boot_sector_template=fat,sectors_per_cluster=8 if xfce else 4,volume_label=b'NT51_RAMDSK')
-    populate(rd);rdbytes=rd.finalize();(out/'NTBOOT.IMG').write_bytes(rdbytes)
-    total=786432 if xfce else 393216
-    vol=Fat16Volume(total_sectors=total-1,boot_sector_template=fat,hidden_sectors=1,sectors_per_cluster=16 if xfce else 8,volume_label=b'NT51_XFCE  ' if xfce else b'NT51_MIN   ')
+    # Chromium profiles and caches need writable space beyond the base desktop.
+    rd_sectors=393216 if chromium else (262144 if xfce else 131072)
+    rd_spc=8 if xfce else 4
+    rd=Fat16Volume(total_sectors=rd_sectors,boot_sector_template=fat,sectors_per_cluster=rd_spc,volume_label=b'NT51_RAMDSK')
+    populate(rd,skip_opt_chromium=chromium);rdbytes=rd.finalize();(out/'NTBOOT.IMG').write_bytes(rdbytes)
+    # 896 MiB for chromium: chrome + headless_shell (~540 MiB) + resources + NTBOOT.IMG; 32 sectors/cluster keeps FAT16 below 65525 clusters.
+    total=1835008 if chromium else (786432 if xfce else 393216)
+    spc=32 if chromium else (16 if xfce else 8)
+    label=b'NT51_CHROM ' if chromium else (b'NT51_XFCE  ' if xfce else b'NT51_MIN   ')
+    vol=Fat16Volume(total_sectors=total-1,boot_sector_template=fat,hidden_sectors=1,sectors_per_cluster=spc,volume_label=label,reserved_sectors=16 if chromium else 1)
     vol.add_host_file('NTLDR',str(boot/'ntldr'),attr=0x27);vol.add_host_file('NTDETECT.COM',str(boot/'ntdetect.com'),attr=0x27)
     ini='[boot loader]\r\ntimeout=0\r\ndefault=ramdisk(0)\\WINDOWS\r\n[operating systems]\r\nramdisk(0)\\WINDOWS="NT 5.1 '+variant+'" /FASTDETECT /SOS /NODEBUG /RDPATH=multi(0)disk(0)rdisk(0)partition(1)\\NTBOOT.IMG\r\n'
-    vol.add_file('BOOT.INI',ini.encode('ascii'),attr=0x27);vol.add_file('NTBOOT.IMG',rdbytes);populate(vol)
+    vol.add_file('BOOT.INI',ini.encode('ascii'),attr=0x27);vol.add_file('NTBOOT.IMG',rdbytes)
+    if chromium and (root/'opt/chromium').is_dir():
+        vol.mkdir('opt');vol.mkdir('opt/chromium')
+        pak_idx=0
+        # Binaries/resources first so they land in the 30-entry raw-LBA table; locale paks last.
+        for f in sorted((root/'opt/chromium').rglob('*'),key=lambda f:('/locales' in f.as_posix(),f.as_posix())):
+            rel=f.relative_to(root).as_posix()
+            if f.is_dir():vol.mkdir(rel)
+            elif f.is_file():
+                vol.add_host_file(rel,str(f))
+                if rel.upper() in vol.file_map and pak_idx<30:
+                    start_cl,fsize=vol.file_map[rel.upper()]
+                    start_lba=vol.hidden_sectors+vol.data_start_sector+(start_cl-2)*vol.spc if start_cl>=2 else 0
+                    path_b=('/'+rel).encode('ascii')[:119]
+                    struct.pack_into('<II120s',vol.image,512+128+pak_idx*128,start_lba,fsize,path_b)
+                    pak_idx+=1
+        if 'OPT/CHROMIUM/LIBGLESV2_TEST.SO' in vol.file_map:
+            vol.add_link('opt/chromium/libGLESv2.so','opt/chromium/libGLESv2_test.so')
+            if pak_idx<30:
+                start_cl,fsize=vol.file_map['OPT/CHROMIUM/LIBGLESV2_TEST.SO']
+                start_lba=vol.hidden_sectors+vol.data_start_sector+(start_cl-2)*vol.spc if start_cl>=2 else 0
+                struct.pack_into('<II120s',vol.image,512+128+pak_idx*128,start_lba,fsize,b'/opt/chromium/libGLESv2.so')
+                pak_idx+=1
+        struct.pack_into('<II',vol.image,512,0x5248434E,pak_idx)
+    elif not chromium:populate(vol)
     code=bytearray(mbr);struct.pack_into('<I',code,0x1b8,0x4e543531)
     end=total-1;cyl=min(1023,end//1008);head=(end%1008)//63;sec=(end%63)+1
     code[0x1be:0x1ce]=struct.pack('<BBBBBBBBII',0x80,0,2,0,0x0e,head,((cyl>>8)<<6)|sec,cyl&255,1,total-1)
     code[0x1ce:0x1fe]=bytes(48);code[0x1fe:0x200]=b'\x55\xaa'
-    image=out/('xfce_usb.img' if xfce else 'minimal_usb.img')
+    image=out/('chromium_usb.img' if chromium else ('xfce_usb.img' if xfce else 'minimal_usb.img'))
     with image.open('wb') as stream:stream.write(code);stream.write(vol.finalize())
     remove_owned(work,out)
     print('Built',image,'bytes',image.stat().st_size,flush=True)

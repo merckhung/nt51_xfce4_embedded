@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Xfce Terminal
+Comment=Terminal Emulator
+Exec=/usr/bin/xfce4-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;Utility;X-XFCE;

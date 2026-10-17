@@ -24,3 +24,4 @@ embedded_build(
 )
 alias(name = "minimal_image", actual = "//minimal_rootfs:usb_image")
 alias(name = "xfce_image", actual = "//rootfs:usb_image")
+alias(name = "chromium_image", actual = "//chromium_rootfs:usb_image")

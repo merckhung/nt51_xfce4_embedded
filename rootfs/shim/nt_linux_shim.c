@@ -2228,7 +2228,9 @@ static long sys_ioctl(int fd, unsigned long req, void *arg) {
         return 0;
     }
     if (req == LINUX_TCGETS) {
-        if (!g_fds[fd].is_console && !g_fds[fd].is_pty && fd > 2) return -LINUX_ENOTTY;
+        if (!g_fds[fd].is_console && !g_fds[fd].is_pty &&
+            (fd > 2 || g_fds[fd].is_pipe || g_fds[fd].is_sock || g_fds[fd].is_devnull || g_fds[fd].h))
+            return -LINUX_ENOTTY;
         struct linux_termios *tio = (struct linux_termios *)arg;
         if (tio) {
             for (int i = 0; i < (int)sizeof(*tio); i++) ((char *)tio)[i] = 0;
@@ -3180,14 +3182,7 @@ static short shim_fd_poll_events(int fd, short req_events) {
 /* ========================================================================= */
 #define IOCTL_FB_PRESENT 0x83202008UL
 
-static const unsigned short g_cursor_mask[16] = {
-    0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
-    0xFF80, 0xFC00, 0xDC00, 0x8E00, 0x0E00, 0x0700, 0x0700, 0x0000
-};
-static const unsigned short g_cursor_fill[16] = {
-    0x0000, 0x4000, 0x6000, 0x7000, 0x7800, 0x7C00, 0x7E00, 0x7F00,
-    0x7F80, 0x7800, 0x4C00, 0x0600, 0x0600, 0x0300, 0x0300, 0x0000
-};
+#include "../../native/include/x11_input.h"
 
 static long sock_read_all(int fd, void *buf, unsigned int count) {
     unsigned char *p = (unsigned char *)buf;
@@ -3201,20 +3196,18 @@ static long sock_read_all(int fd, void *buf, unsigned int count) {
     return (long)count;
 }
 
-static void xtest_send_event(int xfd, unsigned char opcode, unsigned char type,
+static long x11_bridge_write(int fd, const void *buffer, unsigned int count) {
+    return sock_write_fd(fd, buffer, count, 0);
+}
+
+static void xtest_send_event(int *xfd, unsigned char opcode, unsigned char type,
                              unsigned char detail, short rx, short ry) {
-    if (xfd < 0 || !opcode) return;
-    unsigned char pkt[36];
-    for (int i = 0; i < 36; i++) pkt[i] = 0;
-    pkt[0] = opcode;
-    pkt[1] = 2; /* X_XTestFakeInput */
-    pkt[2] = 9; /* 36 / 4 */
-    pkt[3] = 0;
-    pkt[4] = type;
-    pkt[5] = detail;
-    *(short *)(pkt + 24) = rx;
-    *(short *)(pkt + 26) = ry;
-    sock_write_fd(xfd, pkt, 36, 1);
+    if (*xfd < 0 || !opcode) return;
+    if (x11_input_send(*xfd, opcode, type, detail, rx, ry, x11_bridge_write) < 0) {
+        shim_debug_print("[x11_fb_bridge] Input connection lost; reconnecting\n");
+        sys_close(*xfd);
+        *xfd = -1;
+    }
 }
 
 int x11_fb_bridge_main(int argc, char **argv) {
@@ -3265,7 +3258,8 @@ int x11_fb_bridge_main(int argc, char **argv) {
     int mouse_x = 400, mouse_y = 300;
     int xfd = -1;
     unsigned char xtest_op = 0;
-    int focused_terminal = 0;
+    unsigned char input_reply[32];
+    unsigned int input_reply_size = 0;
 
     for (;;) {
         /* Connect to Xvfb for XTEST input injection once X0 listener is active */
@@ -3298,7 +3292,7 @@ int x11_fb_bridge_main(int argc, char **argv) {
                                 sock_write_fd((int)s, gver, 8, 0);
                                 sock_read_all((int)s, rep, 32);
                                 xfd = (int)s;
-                                g_fds[xfd].nonblock = 1;
+                                input_reply_size = 0;
                                 shim_debug_hex("[x11_fb_bridge] XTEST ready op=", (unsigned long)xtest_op);
                             } else {
                                 sys_close((int)s);
@@ -3314,24 +3308,22 @@ int x11_fb_bridge_main(int argc, char **argv) {
             }
         }
 
-        /* Auto-focus terminal window periodically during desktop startup */
-        if (xfd >= 0 && xtest_op) {
-            static int settle_ticks = 0;
-            settle_ticks++;
-            if (settle_ticks >= 300 && settle_ticks <= 3000 && (settle_ticks % 100 == 0)) {
-                unsigned char set_focus[12] = { 42, 1, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
-                sock_write_fd(xfd, set_focus, 12, 1);
-                xtest_send_event(xfd, xtest_op, 6, 0, 300, 200); /* Motion */
-                xtest_send_event(xfd, xtest_op, 4, 1, 300, 200); /* Button 1 press */
-                xtest_send_event(xfd, xtest_op, 5, 1, 300, 200); /* Button 1 release */
-                shim_debug_hex("[x11_fb_bridge] Focus click tick=", (unsigned long)settle_ticks);
-            }
-        }
-
-        /* Drain any X11 events/replies on xfd */
+        /* This client selects no events: any pending packet is an X11 error.
+         * Preserve packet boundaries and report failures instead of discarding them. */
         if (xfd >= 0) {
-            unsigned char tmp[256];
-            while (sock_read_fd(xfd, tmp, sizeof(tmp), 1) > 0) {}
+            long n;
+            while ((n = sock_read_fd(xfd, input_reply + input_reply_size,
+                                     sizeof(input_reply) - input_reply_size, 1)) > 0) {
+                input_reply_size += (unsigned int)n;
+                if (input_reply_size == sizeof(input_reply)) {
+                    if (input_reply[0] == 0) {
+                        shim_debug_hex("[x11_fb_bridge] X11 input error=", input_reply[1]);
+                        shim_debug_hex(" request=", input_reply[10]);
+                    }
+                    input_reply_size = 0;
+                }
+            }
+            if (n == 0) { sys_close(xfd); xfd = -1; }
         }
 
         /* Poll PS/2 Mouse */
@@ -3350,13 +3342,18 @@ int x11_fb_bridge_main(int argc, char **argv) {
                         if (mouse_x > 799) mouse_x = 799;
                         if (mouse_y < 0) mouse_y = 0;
                         if (mouse_y > 599) mouse_y = 599;
-                        xtest_send_event(xfd, xtest_op, 6, 0, (short)mouse_x, (short)mouse_y);
+                        xtest_send_event(&xfd, xtest_op, 6, 0, (short)mouse_x, (short)mouse_y);
                     }
-                    unsigned long btns = mdata[i].Buttons;
+                    unsigned long btns = mdata[i].Buttons & 7;
                     unsigned long diff = btns ^ prev_buttons;
-                    if (diff & 1) xtest_send_event(xfd, xtest_op, (btns & 1) ? 4 : 5, 1, (short)mouse_x, (short)mouse_y);
-                    if (diff & 2) xtest_send_event(xfd, xtest_op, (btns & 2) ? 4 : 5, 3, (short)mouse_x, (short)mouse_y);
-                    if (diff & 4) xtest_send_event(xfd, xtest_op, (btns & 4) ? 4 : 5, 2, (short)mouse_x, (short)mouse_y);
+                    unsigned char wheel_button;
+                    for (int w = x11_input_wheel(mdata[i].Buttons, &wheel_button); w > 0; w--) {
+                        xtest_send_event(&xfd, xtest_op, 4, wheel_button, (short)mouse_x, (short)mouse_y);
+                        xtest_send_event(&xfd, xtest_op, 5, wheel_button, (short)mouse_x, (short)mouse_y);
+                    }
+                    if (diff & 1) xtest_send_event(&xfd, xtest_op, (btns & 1) ? 4 : 5, 1, (short)mouse_x, (short)mouse_y);
+                    if (diff & 2) xtest_send_event(&xfd, xtest_op, (btns & 2) ? 4 : 5, 3, (short)mouse_x, (short)mouse_y);
+                    if (diff & 4) xtest_send_event(&xfd, xtest_op, (btns & 4) ? 4 : 5, 2, (short)mouse_x, (short)mouse_y);
                     prev_buttons = btns;
                 }
             }
@@ -3370,29 +3367,11 @@ int x11_fb_bridge_main(int argc, char **argv) {
                 iosb.Information >= sizeof(KEYBOARD_INPUT_DATA)) {
                 unsigned int cnt = (unsigned int)(iosb.Information / sizeof(KEYBOARD_INPUT_DATA));
                 for (unsigned int i = 0; i < cnt; i++) {
-                    unsigned char sc = (unsigned char)(kdata[i].MakeCode & 0x7F);
-                    unsigned char is_break = (kdata[i].Flags & KEY_BREAK) ? 1 : 0;
-                    unsigned char keycode = sc + 8;
-                    if (kdata[i].Flags & KEY_E0) {
-                        if (sc == 0x48) keycode = 111;      /* Up */
-                        else if (sc == 0x50) keycode = 116; /* Down */
-                        else if (sc == 0x4B) keycode = 113; /* Left */
-                        else if (sc == 0x4D) keycode = 114; /* Right */
-                        else if (sc == 0x1C) keycode = 104; /* KP_Enter */
-                        else if (sc == 0x53) keycode = 119; /* Delete */
-                    }
-                    if (!is_break) {
-                        shim_debug_hex("[x11_fb_bridge] kbd keycode=", (unsigned long)keycode);
-                        if (!focused_terminal) {
-                            unsigned char set_focus[12] = { 42, 1, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
-                            sock_write_fd(xfd, set_focus, 12, 1);
-                            xtest_send_event(xfd, xtest_op, 6, 0, 300, 200);
-                            xtest_send_event(xfd, xtest_op, 4, 1, 300, 200);
-                            xtest_send_event(xfd, xtest_op, 5, 1, 300, 200);
-                            focused_terminal = 1;
-                        }
-                    }
-                    xtest_send_event(xfd, xtest_op, is_break ? 3 : 2, keycode, 300, 200);
+                    unsigned char keycode = x11_input_keycode(kdata[i].MakeCode,
+                                                               (kdata[i].Flags & KEY_E0) != 0);
+                    if (keycode)
+                        xtest_send_event(&xfd, xtest_op, (kdata[i].Flags & KEY_BREAK) ? 3 : 2,
+                                         keycode, (short)mouse_x, (short)mouse_y);
                 }
             }
         }
@@ -3405,6 +3384,7 @@ int x11_fb_bridge_main(int argc, char **argv) {
             for (unsigned int p = 0; p < 800 * 600; p++) {
                 dst[p] = src[p] | 0xFF000000UL;
             }
+            x11_input_draw_cursor(dst, 800, 600, mouse_x, mouse_y);
             struct {
                 void *UserBuffer;
                 unsigned long DstOffset;
@@ -4146,6 +4126,35 @@ static int g_in_vfork = 0;
 static long g_vfork_child_pid = 0;
 static int g_child_exit_code = 0;
 static int g_vfork_is_sync = 0;
+/* In-process vfork children that exited but are not yet reaped by wait4: a
+ * pipeline starts several children before the shell waits for any of them. */
+#define MAX_EXITED_CHILDREN 32
+static struct { long pid; int code; } g_exited_children[MAX_EXITED_CHILDREN];
+static unsigned int g_exited_child_count = 0;
+
+/* In-process vfork children share the parent's memory. An applet must start
+ * as after a real exec: with clean stdio streams rather than an EOF flag or
+ * buffered input left by an earlier child, and with zeroed BusyBox globals
+ * (grep, for example, keeps its pattern list in bb_common_bufsiz1). */
+typedef struct _IO_FILE SHIM_STDIO_FILE;
+extern SHIM_STDIO_FILE *const stdin, *const stdout, *const stderr;
+extern int fflush(SHIM_STDIO_FILE *);
+extern void clearerr(SHIM_STDIO_FILE *);
+#define SHIM_BB_COMMON_BUFSIZE 1024 /* BusyBox COMMON_BUFSIZE without FEATURE_USE_BSS_TAIL */
+extern char bb_common_bufsiz1[] __attribute__((weak));
+extern unsigned char xfunc_error_retval __attribute__((weak));
+static char g_saved_common_bufsiz[SHIM_BB_COMMON_BUFSIZE];
+static unsigned char g_saved_xfunc_error_retval;
+
+static void shim_prepare_applet(void) {
+    fflush(stdin);  /* musl discards unread input from a read-mode stream */
+    clearerr(stdin);
+    clearerr(stdout);
+    clearerr(stderr);
+    if (bb_common_bufsiz1)
+        for (int i = 0; i < SHIM_BB_COMMON_BUFSIZE; i++) bb_common_bufsiz1[i] = 0;
+    if (&xfunc_error_retval) xfunc_error_retval = 1; /* EXIT_FAILURE */
+}
 static SHIM_FD g_vfork_saved_fds[MAX_FD];
 static void *g_saved_ptr_to_globals = NULL;
 static const char *g_saved_applet_name = NULL;
@@ -4173,6 +4182,9 @@ static void vfork_save_state(void) {
     if (bb_get_applet_name) g_saved_applet_name = bb_get_applet_name();
     if (bb_get_die_func) g_saved_die_func = bb_get_die_func();
     g_saved_optind = optind;
+    if (bb_common_bufsiz1)
+        for (int i = 0; i < SHIM_BB_COMMON_BUFSIZE; i++) g_saved_common_bufsiz[i] = bb_common_bufsiz1[i];
+    if (&xfunc_error_retval) g_saved_xfunc_error_retval = xfunc_error_retval;
     if (g_is_dynamic_elf) {
         unsigned long cur_tp = 0;
         __asm__ volatile("movl %%gs:0x0, %0" : "=r"(cur_tp));
@@ -4204,6 +4216,14 @@ static void vfork_restore_state(void) {
     if (bb_set_applet_name && g_saved_applet_name) bb_set_applet_name(g_saved_applet_name);
     if (bb_set_die_func && g_saved_die_func) bb_set_die_func(g_saved_die_func);
     optind = g_saved_optind;
+    if (bb_common_bufsiz1)
+        for (int i = 0; i < SHIM_BB_COMMON_BUFSIZE; i++) bb_common_bufsiz1[i] = g_saved_common_bufsiz[i];
+    if (&xfunc_error_retval) xfunc_error_retval = g_saved_xfunc_error_retval;
+    if (!g_is_dynamic_elf) {
+        clearerr(stdin);
+        clearerr(stdout);
+        clearerr(stderr);
+    }
     if (g_is_dynamic_elf) {
         if (g_saved_cur_tp > 0x10000UL) {
             unsigned char *tp_dst = (unsigned char *)(g_saved_cur_tp - 64);
@@ -4249,6 +4269,19 @@ static void __attribute__((noreturn)) vfork_longjmp_parent(void) {
     for (;;) {}
 }
 
+/* Parent side of a vfork: record a synchronous child's exit for wait4. */
+static long shim_vfork_parent_result(void) {
+    long pid = g_vfork_child_pid;
+    if (g_vfork_is_sync && g_exited_child_count < MAX_EXITED_CHILDREN) {
+        g_exited_children[g_exited_child_count].pid = pid;
+        g_exited_children[g_exited_child_count].code = g_child_exit_code;
+        g_exited_child_count++;
+    }
+    g_vfork_child_pid = 0;
+    g_vfork_is_sync = 0;
+    return pid;
+}
+
 static long sys_vfork(void) {
     /* Prevent dbus-daemon _dbus_spawn_async_with_babysitter double-fork from hijacking main loop */
     if (shim_strcmp(g_current_exe_path, "/usr/bin/dbus-daemon") == 0) {
@@ -4290,7 +4323,7 @@ static long sys_vfork(void) {
     shim_debug_print("[vfork->parent] ");
     shim_debug_print(g_current_exe_path);
     shim_debug_hex(" pid=", (unsigned long)g_vfork_child_pid);
-    return g_vfork_child_pid;
+    return shim_vfork_parent_result();
 }
 
 static long sys_clone(unsigned long flags, unsigned long child_esp,
@@ -4317,7 +4350,7 @@ static long sys_clone(unsigned long flags, unsigned long child_esp,
             g_vfork_child_pid = ++s_next_child_pid;
             g_vfork_is_sync = 1;
         }
-        return g_vfork_child_pid;
+        return shim_vfork_parent_result();
     }
     /* 3. Standard fork() / vfork() */
     return sys_vfork();
@@ -4476,6 +4509,7 @@ static long sys_execve(const char *filename, char **argv, char **envp) {
             app_idx = find_applet_by_name(sub);
             if (app_idx >= 0) {
                 optind = 1;
+                shim_prepare_applet();
                 run_applet_no_and_exit(app_idx, sub, argv + 1);
             }
         }
@@ -4484,6 +4518,7 @@ static long sys_execve(const char *filename, char **argv, char **envp) {
         if (app_idx < 0) app_idx = find_applet_by_name(prog);
         if (app_idx >= 0) {
             optind = 1;
+            shim_prepare_applet();
             run_applet_no_and_exit(app_idx, cmd_base, argv);
         }
     }
@@ -4496,15 +4531,13 @@ static long sys_execve(const char *filename, char **argv, char **envp) {
 
 static long sys_wait4(long pid, int *wstatus, int options, void *rusage) {
     (void)rusage;
-    /* 1. Synchronous in-process vfork child */
-    if (g_vfork_is_sync && g_vfork_child_pid != 0) {
-        if (pid <= 0 || pid == g_vfork_child_pid) {
-            if (wstatus) *wstatus = (g_child_exit_code & 0xFF) << 8;
-            long ret = g_vfork_child_pid;
-            g_vfork_child_pid = 0;
-            g_vfork_is_sync = 0;
-            return ret;
-        }
+    /* 1. Synchronous in-process vfork children */
+    for (unsigned int i = 0; i < g_exited_child_count; i++) {
+        if (pid > 0 && g_exited_children[i].pid != pid) continue;
+        long ret = g_exited_children[i].pid;
+        if (wstatus) *wstatus = (g_exited_children[i].code & 0xFF) << 8;
+        g_exited_children[i] = g_exited_children[--g_exited_child_count];
+        return ret;
     }
 
     /* 2. Asynchronous NT child processes */
@@ -4698,7 +4731,7 @@ long __nt_linux_syscall(long n, long a1, long a2, long a3, long a4, long a5, lon
             unsigned long old_sz = (unsigned long)a2;
             unsigned long new_sz = (unsigned long)a3;
             long new_addr = sys_mmap2(NULL, new_sz, 7, 0x22, -1, 0);
-            if (new_addr > 0 && old_addr) {
+            if ((unsigned long)new_addr < (unsigned long)-4095L && old_addr) {
                 unsigned long cp = old_sz < new_sz ? old_sz : new_sz;
                 for (unsigned long k = 0; k < cp; k++) ((unsigned char *)new_addr)[k] = ((const unsigned char *)old_addr)[k];
             }

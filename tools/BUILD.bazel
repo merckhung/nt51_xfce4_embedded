@@ -1,3 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
 exports_files(glob(["*.py", "*.cmd", "*.json"]))
+alias(
+    name = "build_runner",
+    actual = select({
+        "@platforms//os:windows": ":run_windows.cmd",
+        "//conditions:default": ":run.cmd",
+    }),
+    visibility = ["//visibility:public"],
+)
 filegroup(name = "build_helpers", srcs = glob(["*.py"]), visibility = ["//visibility:public"])

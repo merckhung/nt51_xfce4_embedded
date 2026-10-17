@@ -42,12 +42,13 @@ class Fat16Volume:
         heads: int = 16,
         sectors_per_track: int = 63,
         volume_label: bytes = b"NT51_EMBED3",
+        reserved_sectors: int = 1,
     ):
         self.sector_size = 512
         self.total_sectors = total_sectors
         self.hidden_sectors = hidden_sectors
         self.spc = sectors_per_cluster
-        self.reserved_sectors = 1
+        self.reserved_sectors = reserved_sectors
         self.num_fats = 2
         self.root_entries = root_entries
         self.root_dir_sectors = (root_entries * 32 + 511) // 512

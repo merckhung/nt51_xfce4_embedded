@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * rootfs/net/net_stack.c
- * Complete Ethernet II + ARP + IPv4 + ICMP + UDP/DNS + TCP + HTTP/1.1 Stack
+ * Experimental Ethernet II / ARP / IPv4 / ICMP / DNS / HTTP polling
  *
  * for Windows XP Embedded 3 (over rtl8139.sys / \DosDevices\net0)
  */
@@ -72,8 +72,7 @@ static void net_init_ustr(NT_UNICODE_STRING *u, uint16_t *buf, const char *ascii
 
 static HANDLE g_hNetDev = NULL;
 static NET_ADAPTER_INFO g_NetInfo;
-static int g_NetInitialized = 0;
-static uint8_t g_GatewayMac[6] = { 0x52, 0x54, 0x00, 0x12, 0x35, 0x02 };
+static uint8_t g_GatewayMac[6];
 static int g_GatewayMacResolved = 0;
 static uint16_t g_IpIdCounter = 0x1337;
 static uint16_t g_EphemeralPort = 49152;
@@ -104,7 +103,11 @@ static NTSTATUS net_ioctl(unsigned long code, void *inBuf, unsigned long inLen, 
 int net_stack_init(void) {
     if (g_hNetDev) {
         unsigned long got = 0;
-        net_ioctl(IOCTL_NET_GET_INFO, NULL, 0, &g_NetInfo, sizeof(g_NetInfo), &got);
+        NTSTATUS status = net_ioctl(IOCTL_NET_GET_INFO, NULL, 0, &g_NetInfo, sizeof(g_NetInfo), &got);
+        if (!NT_SUCCESS(status) || got < sizeof(g_NetInfo)) {
+            memset(&g_NetInfo, 0, sizeof(g_NetInfo));
+            return -1;
+        }
         return 0;
     }
 
@@ -134,35 +137,29 @@ int net_stack_init(void) {
     };
     NTSTATUS st = DoNtSyscall(NTSYS_CreateFile, a, 11);
     if (!NT_SUCCESS(st) || !h) {
-        /* Fallback defaults if driver not yet loaded */
-        g_NetInfo.MacAddress[0] = 0x52; g_NetInfo.MacAddress[1] = 0x54;
-        g_NetInfo.MacAddress[2] = 0x00; g_NetInfo.MacAddress[3] = 0x12;
-        g_NetInfo.MacAddress[4] = 0x34; g_NetInfo.MacAddress[5] = 0x56;
-        g_NetInfo.IoBase      = 0xC100;
-        g_NetInfo.IrqLine     = 11;
-        g_NetInfo.LinkUp      = 1;
-        g_NetInfo.PciVendorId = 0x10EC;
-        g_NetInfo.PciDeviceId = 0x8139;
-        g_NetInfo.Ipv4Addr    = 0x0A00020FUL;
-        g_NetInfo.Ipv4Netmask = 0xFFFFFF00UL;
-        g_NetInfo.Ipv4Gateway = 0x0A000202UL;
-        g_NetInfo.Ipv4Dns     = 0x0A000203UL;
+        memset(&g_NetInfo, 0, sizeof(g_NetInfo));
         return -1;
     }
 
     g_hNetDev = h;
     unsigned long got = 0;
-    net_ioctl(IOCTL_NET_GET_INFO, NULL, 0, &g_NetInfo, sizeof(g_NetInfo), &got);
-    g_NetInitialized = 1;
+    st = net_ioctl(IOCTL_NET_GET_INFO, NULL, 0, &g_NetInfo, sizeof(g_NetInfo), &got);
+    if (!NT_SUCCESS(st) || got < sizeof(g_NetInfo)) {
+        unsigned long close_args[1] = { (unsigned long)g_hNetDev };
+        DoNtSyscall(NTSYS_Close, close_args, 1);
+        g_hNetDev = NULL;
+        memset(&g_NetInfo, 0, sizeof(g_NetInfo));
+        return -1;
+    }
     return 0;
 }
 
 int net_get_adapter_info(NET_ADAPTER_INFO *out_info) {
-    net_stack_init();
+    int status = net_stack_init();
     if (out_info) {
         memcpy(out_info, &g_NetInfo, sizeof(NET_ADAPTER_INFO));
     }
-    return g_hNetDev ? 0 : -1;
+    return status;
 }
 
 void net_format_ip(uint32_t ip, char *buf, int buf_len) {
@@ -481,10 +478,20 @@ int net_icmp_ping(uint32_t dst_ip, uint16_t seq, int *out_rtt_ms, int *out_ttl) 
             ETH_HDR *reth = (ETH_HDR *)rxbuf;
             if (bswap16(reth->ethertype) == 0x0800) {
                 IPV4_HDR *rip = (IPV4_HDR *)(rxbuf + sizeof(ETH_HDR));
-                if (rip->protocol == 1) {
-                    ICMP_HDR *ricmp = (ICMP_HDR *)(rxbuf + sizeof(ETH_HDR) + ((rip->ver_ihl & 0x0F) * 4));
-                    if (ricmp->type == 0 && bswap16(ricmp->id) == 0x5150 && bswap16(ricmp->sequence) == seq) {
-                        if (out_rtt_ms) *out_rtt_ms = (wait_ms == 0) ? 1 : wait_ms;
+                unsigned ihl = (rip->ver_ihl & 0x0F) * 4;
+                unsigned reply_len = bswap16(rip->tot_len);
+                if ((rip->ver_ihl >> 4) == 4 && ihl >= sizeof(IPV4_HDR) &&
+                    reply_len == ihl + sizeof(ICMP_HDR) + (unsigned)payload_len &&
+                    sizeof(ETH_HDR) + reply_len <= (unsigned)n &&
+                    !(bswap16(rip->frag_off) & 0x3FFF) && rip->protocol == 1 &&
+                    bswap32(rip->saddr) == dst_ip && bswap32(rip->daddr) == g_NetInfo.Ipv4Addr &&
+                    ip_checksum(rip, ihl) == 0) {
+                    ICMP_HDR *ricmp = (ICMP_HDR *)(rxbuf + sizeof(ETH_HDR) + ihl);
+                    if (ricmp->type == 0 && ricmp->code == 0 && bswap16(ricmp->id) == 0x5150 &&
+                        bswap16(ricmp->sequence) == seq &&
+                        ip_checksum(ricmp, sizeof(ICMP_HDR) + payload_len) == 0 &&
+                        memcmp((uint8_t *)ricmp + sizeof(ICMP_HDR), data, payload_len) == 0) {
+                        if (out_rtt_ms) *out_rtt_ms = wait_ms;
                         if (out_ttl)    *out_ttl    = rip->ttl;
                         return 0;
                     }
@@ -500,19 +507,67 @@ int net_icmp_ping(uint32_t dst_ip, uint16_t seq, int *out_rtt_ms, int *out_ttl) 
 /* UDP DNS Resolver (Queries 10.0.2.3:53 over RTL8139)                       */
 /* ========================================================================= */
 
+/* Skip one encoded DNS name without following compression pointers. */
+static int dns_skip_name(const uint8_t *message, int length, int *position) {
+    int offset = *position;
+    while (offset < length) {
+        unsigned label = message[offset++];
+        if (!label) { *position = offset; return 0; }
+        if ((label & 0xC0) == 0xC0) {
+            if (offset >= length || (((label & 63) << 8) | message[offset]) >= (unsigned)length) return -1;
+            *position = offset + 1;
+            return 0;
+        }
+        if (label > 63 || label > (unsigned)(length - offset)) return -1;
+        offset += label;
+    }
+    return -1;
+}
+
+static int dns_read_address(const uint8_t *message, int length, uint16_t id, uint32_t *address) {
+    if (length < 12 || (((uint16_t)message[0] << 8) | message[1]) != id ||
+        !(message[2] & 0x80) || (message[2] & 0x7A) || (message[3] & 15)) return -1;
+    unsigned questions = ((unsigned)message[4] << 8) | message[5];
+    unsigned answers = ((unsigned)message[6] << 8) | message[7];
+    int offset = 12;
+    if (questions != 1) return -1;
+    if (dns_skip_name(message, length, &offset) || offset + 4 > length) return -1;
+    offset += 4;
+    for (unsigned i = 0; i < answers; i++) {
+        if (dns_skip_name(message, length, &offset) || offset + 10 > length) return -1;
+        unsigned type = ((unsigned)message[offset] << 8) | message[offset + 1];
+        unsigned klass = ((unsigned)message[offset + 2] << 8) | message[offset + 3];
+        unsigned bytes = ((unsigned)message[offset + 8] << 8) | message[offset + 9];
+        offset += 10;
+        if (bytes > (unsigned)(length - offset)) return -1;
+        if (type == 1 && klass == 1 && bytes == 4) {
+            *address = ((uint32_t)message[offset] << 24) | ((uint32_t)message[offset + 1] << 16) |
+                       ((uint32_t)message[offset + 2] << 8) | message[offset + 3];
+            return 0;
+        }
+        offset += bytes;
+    }
+    return -1;
+}
+
 int net_dns_resolve(const char *hostname, uint32_t *out_ip) {
     if (!hostname || !out_ip) return -1;
+    *out_ip = 0;
     if (net_parse_ipv4(hostname, out_ip) == 0) {
         return 0;
     }
-    if (strcmp(hostname, "localhost") == 0 || strcmp(hostname, "host.qemu") == 0) {
+    if (strcmp(hostname, "localhost") == 0) {
+        *out_ip = 0x7F000001UL;
+        return 0;
+    }
+    if (strcmp(hostname, "host.qemu") == 0) {
         *out_ip = 0x0A000202UL; /* 10.0.2.2 */
         return 0;
     }
 
-    net_stack_init();
+    if (net_stack_init() < 0) return -1;
     uint8_t dst_mac[6];
-    net_arp_resolve(g_NetInfo.Ipv4Dns, dst_mac);
+    if (net_arp_resolve(g_NetInfo.Ipv4Dns, dst_mac) < 0) return -1;
 
     uint8_t pkt[512];
     memset(pkt, 0, sizeof(pkt));
@@ -535,7 +590,7 @@ int net_dns_resolve(const char *hostname, uint32_t *out_ip) {
     while (*p) {
         const char *dot = strchr(p, '.');
         int lbl_len = dot ? (int)(dot - p) : (int)strlen(p);
-        if (lbl_len <= 0 || lbl_len > 63 || qpos + lbl_len + 6 >= 256) break;
+        if (lbl_len <= 0 || lbl_len > 63 || qpos + lbl_len + 6 >= 256) return -1;
         dns[qpos++] = (uint8_t)lbl_len;
         memcpy(&dns[qpos], p, lbl_len);
         qpos += lbl_len;
@@ -572,7 +627,7 @@ int net_dns_resolve(const char *hostname, uint32_t *out_ip) {
     udp->check  = 0;
     udp->check  = tcp_udp_checksum(g_NetInfo.Ipv4Addr, g_NetInfo.Ipv4Dns, 17, udp, udp_len);
 
-    tx_eth_frame(pkt, sizeof(ETH_HDR) + ip_len);
+    if (tx_eth_frame(pkt, sizeof(ETH_HDR) + ip_len) < 0) return -1;
 
     uint8_t rxbuf[1536];
     int wait_ms;
@@ -583,29 +638,20 @@ int net_dns_resolve(const char *hostname, uint32_t *out_ip) {
             if (bswap16(reth->ethertype) == 0x0800) {
                 IPV4_HDR *rip = (IPV4_HDR *)(rxbuf + sizeof(ETH_HDR));
                 int ihl = (rip->ver_ihl & 0x0F) * 4;
-                if (rip->protocol == 17) {
+                unsigned ip_len = bswap16(rip->tot_len);
+                if ((rip->ver_ihl >> 4) == 4 && ihl >= (int)sizeof(IPV4_HDR) &&
+                    ip_len >= (unsigned)ihl + sizeof(UDP_HDR) + 12 &&
+                    sizeof(ETH_HDR) + ip_len <= (unsigned)n &&
+                    !(bswap16(rip->frag_off) & 0x3FFF) && rip->protocol == 17 &&
+                    bswap32(rip->saddr) == g_NetInfo.Ipv4Dns &&
+                    bswap32(rip->daddr) == g_NetInfo.Ipv4Addr && ip_checksum(rip, ihl) == 0) {
                     UDP_HDR *rudp = (UDP_HDR *)(rxbuf + sizeof(ETH_HDR) + ihl);
-                    if (bswap16(rudp->source) == 53 && bswap16(rudp->dest) == sport) {
-                        uint8_t *rdns = (uint8_t *)rudp + sizeof(UDP_HDR);
-                        int rdns_len = n - (int)(sizeof(ETH_HDR) + ihl + sizeof(UDP_HDR));
-                        uint16_t r_id = ((uint16_t)rdns[0] << 8) | rdns[1];
-                        uint16_t ancount = ((uint16_t)rdns[6] << 8) | rdns[7];
-                        if (r_id == dns_id && ancount > 0) {
-                            /* Scan answer section for TYPE A (0x0001) CLASS IN (0x0001) RDLENGTH 4 (0x0004) */
-                            int idx;
-                            for (idx = qpos; idx + 14 <= rdns_len; idx++) {
-                                if (rdns[idx] == 0x00 && rdns[idx + 1] == 0x01 &&
-                                    rdns[idx + 2] == 0x00 && rdns[idx + 3] == 0x01 &&
-                                    rdns[idx + 8] == 0x00 && rdns[idx + 9] == 0x04) {
-                                    *out_ip = ((uint32_t)rdns[idx + 10] << 24)
-                                            | ((uint32_t)rdns[idx + 11] << 16)
-                                            | ((uint32_t)rdns[idx + 12] << 8)
-                                            | ((uint32_t)rdns[idx + 13]);
-                                    return 0;
-                                }
-                            }
-                        }
-                    }
+                    unsigned udp_len = bswap16(rudp->len);
+                    if (bswap16(rudp->source) == 53 && bswap16(rudp->dest) == sport &&
+                        udp_len >= sizeof(UDP_HDR) + 12 && udp_len <= ip_len - ihl &&
+                        (!rudp->check || tcp_udp_checksum(g_NetInfo.Ipv4Dns, g_NetInfo.Ipv4Addr, 17, rudp, udp_len) == 0) &&
+                        dns_read_address((uint8_t *)rudp + sizeof(UDP_HDR), udp_len - sizeof(UDP_HDR), dns_id, out_ip) == 0)
+                        return 0;
                 }
             }
         }
@@ -850,34 +896,46 @@ int net_applet_main(int argc, char **argv) {
     if (slash) prog = slash + 1;
 
     NET_ADAPTER_INFO ni;
-    net_get_adapter_info(&ni);
+    if (net_get_adapter_info(&ni) < 0) {
+        fprintf(stderr, "Network adapter query failed: rtl8139.sys unavailable or invalid reply\n");
+        return 1;
+    }
 
     if (strcmp(prog, "ifconfig") == 0 || strcmp(prog, "ip") == 0) {
-        char ip_s[20], mask_s[20], gw_s[20];
+        if (argc > 2 || (argc == 2 && strcmp(argv[1], "eth0") != 0)) {
+            fprintf(stderr, "Only read-only adapter queries are supported: ifconfig [eth0]\n");
+            return 1;
+        }
+        char ip_s[20], mask_s[20], gw_s[20], broadcast_s[20];
         net_format_ip(ni.Ipv4Addr, ip_s, sizeof(ip_s));
         net_format_ip(ni.Ipv4Netmask, mask_s, sizeof(mask_s));
         net_format_ip(ni.Ipv4Gateway, gw_s, sizeof(gw_s));
         printf("eth0      Link encap:Ethernet  HWaddr %02X:%02X:%02X:%02X:%02X:%02X\n",
                ni.MacAddress[0], ni.MacAddress[1], ni.MacAddress[2],
                ni.MacAddress[3], ni.MacAddress[4], ni.MacAddress[5]);
-        printf("          inet addr:%s  Bcast:10.0.2.255  Mask:%s\n", ip_s, mask_s);
-        printf("          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1\n");
+        net_format_ip(ni.Ipv4Addr | ~ni.Ipv4Netmask, broadcast_s, sizeof(broadcast_s));
+        printf("          inet addr:%s  Bcast:%s  Mask:%s (fixed configuration)\n", ip_s, broadcast_s, mask_s);
+        printf("          link:%s  MTU:1500\n", ni.LinkUp ? "up" : "down");
         printf("          RX packets:%lu bytes:%lu  TX packets:%lu bytes:%lu\n",
                ni.RxPackets, ni.RxBytes, ni.TxPackets, ni.TxBytes);
         printf("          driver:rtl8139.sys (PCI %04X:%04X) Base port:0x%04X IRQ:%u\n\n",
                ni.PciVendorId, ni.PciDeviceId, ni.IoBase, ni.IrqLine);
-        printf("lo        Link encap:Local Loopback\n");
-        printf("          inet addr:127.0.0.1  Mask:255.0.0.0\n");
-        printf("          UP LOOPBACK RUNNING  MTU:65536  Metric:1\n");
         return 0;
     }
 
     if (strcmp(prog, "route") == 0) {
-        printf("Kernel IP routing table (Windows XP NT 5.1 TCP/IP Stack)\n");
+        if (argc > 1) {
+            fprintf(stderr, "Route modification is unsupported\n");
+            return 1;
+        }
+        char gateway[20], network[20], mask[20];
+        net_format_ip(ni.Ipv4Gateway, gateway, sizeof(gateway));
+        net_format_ip(ni.Ipv4Addr & ni.Ipv4Netmask, network, sizeof(network));
+        net_format_ip(ni.Ipv4Netmask, mask, sizeof(mask));
+        printf("Embedded fixed IPv4 routes (user-mode stack)\n");
         printf("Destination     Gateway         Genmask         Flags Metric Ref Use Iface\n");
-        printf("0.0.0.0         10.0.2.2        0.0.0.0         UG    0      0     0 eth0\n");
-        printf("10.0.2.0        0.0.0.0         255.255.255.0   U     0      0     0 eth0\n");
-        printf("127.0.0.0       0.0.0.0         255.0.0.0       U     0      0     0 lo\n");
+        printf("0.0.0.0         %-15s 0.0.0.0         UG    0      0     0 eth0\n", gateway);
+        printf("%-15s 0.0.0.0         %-15s U     0      0     0 eth0\n", network, mask);
         return 0;
     }
 
@@ -893,12 +951,12 @@ int net_applet_main(int argc, char **argv) {
         if (net_dns_resolve(target, &dst_ip) < 0) { fprintf(stderr, "DNS resolution failed: %s\n", target); return 1; }
         char ip_s[24];
         net_format_ip(dst_ip, ip_s, sizeof(ip_s));
-        printf("PING %s (%s): 56 data bytes via eth0 (rtl8139.sys)\n", target, ip_s);
+        printf("PING %s (%s): 32 data bytes via eth0 (rtl8139.sys)\n", target, ip_s);
         int i, ok = 0;
         for (i = 1; i <= 4; i++) {
             int rtt = 1, ttl = 64;
             if (net_icmp_ping(dst_ip, (uint16_t)i, &rtt, &ttl) == 0) {
-                printf("64 bytes from %s: seq=%d ttl=%d time=%d ms\n", ip_s, i, ttl, rtt);
+                printf("40 bytes from %s: seq=%d ttl=%d poll_wait=%d ms\n", ip_s, i, ttl, rtt);
                 ok++;
             } else {
                 printf("Request timeout for icmp_seq %d\n", i);
@@ -940,7 +998,8 @@ int net_applet_main(int argc, char **argv) {
         return failed;
     }
 
-    return 0;
+    fprintf(stderr, "Unsupported network applet: %s\n", prog);
+    return 1;
 }
 
 /* ========================================================================= */

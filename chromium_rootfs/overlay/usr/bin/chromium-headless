@@ -1,0 +1,22 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Launch the pre-built 32-bit headless variant (headless_shell, a.k.a.
+# chrome-headless-shell) on the NT 5.1 kernel + Linux syscall shim.
+# Single process, no sandbox/zygote, SwiftShader through ANGLE,
+# no D-Bus or resolver/proxy overrides.
+export DBUS_SESSION_BUS_ADDRESS=disabled:
+exec /opt/chromium/headless_shell \
+  --no-sandbox \
+  --no-zygote \
+  --single-process \
+  --disable-gpu-sandbox \
+  --disable-seccomp-filter-sandbox \
+  --disable-setuid-sandbox \
+  --disable-crash-reporter \
+  --disable-crashpad-for-testing \
+  --disable-dev-shm-usage \
+  --use-gl=angle \
+  --use-angle=swiftshader \
+  --enable-unsafe-swiftshader \
+  --lang=en-US \
+  "$@"

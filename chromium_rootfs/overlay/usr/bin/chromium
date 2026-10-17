@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Launch the pre-built 32-bit Chromium (chromium_rootfs/pkg/opt/chromium) on
+# the NT 5.1 kernel + Linux syscall shim. The GUI uses CPU software rendering
+# with GPU and SwiftShader disabled. The shim has no seccomp/namespaces/zygote support,
+# so everything runs in one process. No resolver or proxy overrides are set:
+# host names are resolved through /etc/resolv.conf over the real NIC.
+# Chromium only uses D-Bus for optional desktop integration (power, secrets,
+# portals). libdbus aborts on this shim's session-bus connection, so the
+# browser is started without a bus; the XFCE desktop still uses it.
+export DBUS_SESSION_BUS_ADDRESS=disabled:
+exec /opt/chromium/chrome \
+  --no-sandbox \
+  --no-zygote \
+  --single-process \
+  --in-process-gpu \
+  --disable-gpu-sandbox \
+  --disable-seccomp-filter-sandbox \
+  --disable-setuid-sandbox \
+  --disable-crash-reporter \
+  --disable-crashpad-for-testing \
+  --no-first-run \
+  --no-default-browser-check \
+  --test-type \
+  --disable-hang-monitor \
+  --disable-background-networking \
+  --disable-sync \
+  --disable-extensions \
+  --disable-component-extensions-with-background-pages \
+  --disable-component-update \
+  --password-store=basic \
+  --disable-features=Vulkan,SpareRendererForSitePerProcess,DbusSecretPortal,UseFreedesktopSecretKeyProvider \
+  --use-gl=disabled \
+  --disable-gpu \
+  --disable-gpu-compositing \
+  --disable-software-rasterizer \
+  --ozone-platform=x11 \
+  --lang=en-US \
+  "$@"

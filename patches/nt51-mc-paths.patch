@@ -1,0 +1,21 @@
+diff --git a/Source/XPSP1/NT/sdktools/mc/mc.c b/Source/XPSP1/NT/sdktools/mc/mc.c
+--- a/Source/XPSP1/NT/sdktools/mc/mc.c
++++ b/Source/XPSP1/NT/sdktools/mc/mc.c
+@@ -255,7 +255,7 @@ main(
+                             strcpy( s1 = RcInclFileName, *++argv );
+ //                            s1 += strlen( s1 ) - 1;
+                             s1 += strlen( s1 );
+-                            s1 = CharPrev( HeaderFileName, s1 );
++                            s1 = CharPrev( RcInclFileName, s1 );
+                             if (*s1 != '\\' && *s1 != '/') {
+ //                                *++s1 = '\\';
+                                 s1 = CharNext( s1 );
+@@ -296,7 +296,7 @@ main(
+                             strcpy( s1 = DebugFileName, *++argv );
+ //                            s1 += strlen( s1 ) - 1;
+                             s1 += strlen( s1 );
+-                            s1 = CharPrev( HeaderFileName, s1 );
++                            s1 = CharPrev( DebugFileName, s1 );
+                             if (*s1 != '\\' && *s1 != '/') {
+ //                                *++s1 = '\\';
+                                 s1 = CharNext( s1 );

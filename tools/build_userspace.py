@@ -29,7 +29,17 @@ def build_userspace(cfg,out,project,nt):
     archive(objects,out/'libc.a')
     flags=common+['-fshort-wchar','-isystem',str(musl/'include'),'-I'+str(src/'shim'),'-I'+str(src/'net'),'-I'+str(src/'usb'),'-O2','-fno-builtin','-D_GNU_SOURCE','-Wno-incompatible-pointer-types','-Wno-int-conversion','-Wno-pointer-sign']
     shims=[src/'shim/nt_linux_shim.c',src/'shim/nt_syscall.s',src/'shim/int64_builtins.c',src/'shim/modtools.c',src/'net/net_stack.c',src/'usb/usb_stack.c',project/'native/unsupported_tools.c',project/'native/ntps.c',project/'native/ntinfo.c']
-    if variant == 'rootfs':shims.append(src/'xfce_probe.c')
+    if variant in ('rootfs','chromium_rootfs'):shims.append(src/'xfce_probe.c')
+    if variant == 'chromium_rootfs':
+        gcompat_obj=out/'gcompat.o'
+        run([cc,'-target','i386-unknown-linux-musl','-m32','-march=i586','-fPIC','-O2','-I'+str(musl/'include'),'-c',src/'shim/gcompat.c','-o',gcompat_obj])
+        libc_stub=out/'libc_stub.so'
+        run([tool('ld.lld'),'-m','elf_i386','-shared','-soname','libc.so.6','-o',libc_stub,gcompat_obj])
+        run([tool('ld.lld'),'-m','elf_i386','-shared','-soname','ld-linux.so.2','--no-as-needed','--allow-shlib-undefined','--unresolved-symbols=ignore-all','-o',out/'libgcompat.so',gcompat_obj,libc_stub])
+        probe_obj=out/'swiftshader_probe.o'
+        run([cc,'-target','i386-unknown-linux-musl','-m32','-march=i586','-fPIE','-O2','-I'+str(musl/'include'),'-c',src/'shim/swiftshader_probe.c','-o',probe_obj])
+        run([tool('ld.lld'),'-m','elf_i386','-pie','-dynamic-linker','/lib/ld-musl-i386.so.1','--no-as-needed','--allow-shlib-undefined','--unresolved-symbols=ignore-all','-o',out/'swiftshader_probe',probe_obj,libc_stub,out/'libgcompat.so'])
+        libc_stub.unlink()
     tests=sorted((project/'tests').glob('*.c'))
     shimobjs=compile_many(shims+tests,cc,flags+['-DLIBNTSHIM_BUILD'],out/'shim-obj');archive(shimobjs,out/'libntshim.a')
     entry=compile_many([src/'shim/entry.c'],cc,flags,out/'entry-obj')[0]

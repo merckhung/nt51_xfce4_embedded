@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="click_to_focus" type="bool" value="false"/>
+    <property name="focus_new" type="bool" value="true"/>
+    <property name="raise_on_focus" type="bool" value="true"/>
+    <property name="raise_on_click" type="bool" value="true"/>
+    <property name="prevent_focus_stealing" type="bool" value="false"/>
+    <property name="focus_delay" type="int" value="0"/>
+    <property name="raise_delay" type="int" value="0"/>
+  </property>
+</channel>

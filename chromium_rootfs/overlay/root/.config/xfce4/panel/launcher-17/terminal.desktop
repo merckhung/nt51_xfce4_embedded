@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Exec=xfce4-terminal
+Icon=utilities-terminal
+Terminal=false

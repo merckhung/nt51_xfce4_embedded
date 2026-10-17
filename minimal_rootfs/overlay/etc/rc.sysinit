@@ -5,9 +5,9 @@ export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export HOME=/root
 export USER=root
 export TERM=vt100
-insmod /lib/modules/usbdrv.sys
-insmod /lib/modules/rtl8139.sys
-ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up
+insmod /lib/modules/usbdrv.sys || exit 1
+insmod /lib/modules/rtl8139.sys || exit 1
+ifconfig eth0 || exit 1
 echo "[rc.sysinit] Loaded usbdrv.sys and rtl8139.sys."
 ps aux > /tmp/ps-boot.txt
 ps_status=$?

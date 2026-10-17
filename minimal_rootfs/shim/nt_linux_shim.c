@@ -576,11 +576,17 @@ static int ConsoleGetByte(int nonblocking) {
 /* ========================================================================= */
 #define MAX_FD 128
 
+/* A vfork child runs to completion before its parent resumes, so a pipeline's
+ * writer cannot wait for its reader: the buffer must hold the whole output. */
+#define SHIM_PIPE_SIZE (4UL * 1024 * 1024)
+
 typedef struct _SHIM_PIPE {
-    unsigned char buf[4096];
+    unsigned char *buf;
     unsigned int head;
     unsigned int tail;
     unsigned int count;
+    unsigned int readers;  /* open descriptors per end, across dup and vfork */
+    unsigned int writers;
     unsigned char write_closed;
     unsigned char read_closed;
 } SHIM_PIPE;
@@ -829,7 +835,7 @@ static long sys_read(int fd, void *buf, unsigned int count) {
         char *dst = (char *)buf;
         while (n < count && p->count > 0) {
             dst[n++] = p->buf[p->head];
-            p->head = (p->head + 1) % sizeof(p->buf);
+            p->head = (p->head + 1) % SHIM_PIPE_SIZE;
             p->count--;
         }
         return (long)n;
@@ -859,9 +865,9 @@ static long sys_write(int fd, const void *buf, unsigned int count) {
         const char *src = (const char *)buf;
         unsigned int n = 0;
         while (n < count) {
-            if (p->count < sizeof(p->buf)) {
+            if (p->count < SHIM_PIPE_SIZE) {
                 p->buf[p->tail] = src[n++];
-                p->tail = (p->tail + 1) % sizeof(p->buf);
+                p->tail = (p->tail + 1) % SHIM_PIPE_SIZE;
                 p->count++;
             } else {
                 LARGE_INTEGER delay;
@@ -1058,8 +1064,17 @@ static long sys_close(int fd) {
     if (g_fds[fd].is_pipe) {
         SHIM_PIPE *p = g_fds[fd].pipe;
         if (p) {
-            if (g_fds[fd].is_pipe_write) p->write_closed = 1;
-            else p->read_closed = 1;
+            if (g_fds[fd].is_pipe_write) {
+                if (p->writers && --p->writers == 0) p->write_closed = 1;
+            } else if (p->readers && --p->readers == 0) {
+                p->read_closed = 1;
+            }
+            if (!p->readers && !p->writers && p->buf) {
+                unsigned long size = 0;
+                void *base = p->buf;
+                Nt_FreeVirtualMemory((HANDLE)-1, &base, &size, MEM_RELEASE);
+                p->buf = NULL;
+            }
         }
         g_fds[fd].is_open = 0;
         return 0;
@@ -1236,7 +1251,8 @@ static long sys_munmap(void *addr, unsigned long len) {
 static long sys_ioctl(int fd, unsigned long req, void *arg) {
     if (fd < 0 || fd >= MAX_FD || !g_fds[fd].is_open) return -LINUX_EBADF;
 
-    if (g_fds[fd].is_console || fd <= 2) {
+    /* Standard descriptors without a handle are the console; redirected ones are not terminals. */
+    if (g_fds[fd].is_console || (fd <= 2 && !g_fds[fd].is_pipe && !g_fds[fd].h)) {
         if (req == LINUX_TIOCGWINSZ) {
             struct linux_winsize *ws = (struct linux_winsize *)arg;
             if (ws) {
@@ -1262,6 +1278,9 @@ static long sys_ioctl(int fd, unsigned long req, void *arg) {
             return 0;
         }
     }
+    if (req == LINUX_TCGETS || req == LINUX_TCSETS || req == LINUX_TCSETSW ||
+        req == LINUX_TCSETSF || req == LINUX_TIOCGWINSZ)
+        return -LINUX_ENOTTY;
 
     if (g_fds[fd].h && req >= 0x220000) {
         IO_STATUS_BLOCK iosb;
@@ -1617,12 +1636,17 @@ static long sys_access(const char *pathname, int mode) {
 #define LINUX_F_SETFL         4
 #define LINUX_F_DUPFD_CLOEXEC 1030
 
-/* dup/dup2 give the new fd its own NT handle (same file object), so closing
- * one descriptor no longer closes the handle under the other one. */
+/* dup/dup2 give the new fd its own NT handle (same file object) or pipe-end
+ * reference, so closing one descriptor leaves the other one usable. */
 static void ShimDupHandleSlot(int newfd) {
     HANDLE src = g_fds[newfd].h, dst = NULL;
     unsigned long a[7];
-    if (g_fds[newfd].is_console || g_fds[newfd].is_pipe || !src) return;
+    if (g_fds[newfd].is_pipe && g_fds[newfd].pipe) {
+        if (g_fds[newfd].is_pipe_write) g_fds[newfd].pipe->writers++;
+        else g_fds[newfd].pipe->readers++;
+        return;
+    }
+    if (g_fds[newfd].is_console || !src) return;
     a[0] = (unsigned long)(HANDLE)-1; a[1] = (unsigned long)src;
     a[2] = (unsigned long)(HANDLE)-1; a[3] = (unsigned long)&dst;
     a[4] = 0; a[5] = 0; a[6] = 2; /* DUPLICATE_SAME_ACCESS */
@@ -1671,7 +1695,6 @@ static long sys_fcntl(int fd, int cmd, unsigned long arg) {
 }
 
 static SHIM_PIPE g_pipe_pool[16];
-static unsigned int g_pipe_pool_idx = 0;
 
 static long sys_pipe(int *pipefd) {
     if (!pipefd) return -LINUX_EFAULT;
@@ -1684,10 +1707,21 @@ static long sys_pipe(int *pipefd) {
     }
     if (rfd < 0 || wfd < 0) return -LINUX_EMFILE;
 
-    SHIM_PIPE *p = &g_pipe_pool[g_pipe_pool_idx++ % 16];
+    SHIM_PIPE *p = NULL;
+    for (int i = 0; i < 16; i++) {
+        if (!g_pipe_pool[i].readers && !g_pipe_pool[i].writers) { p = &g_pipe_pool[i]; break; }
+    }
+    if (!p) return -LINUX_EMFILE;
+    void *base = NULL;
+    unsigned long size = SHIM_PIPE_SIZE;
+    if (!NT_SUCCESS(Nt_AllocateVirtualMemory((HANDLE)-1, &base, 0, &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)))
+        return -LINUX_ENOMEM;
+    p->buf = (unsigned char *)base;
     p->head = 0;
     p->tail = 0;
     p->count = 0;
+    p->readers = 1;
+    p->writers = 1;
     p->write_closed = 0;
     p->read_closed = 0;
 
@@ -1782,8 +1816,36 @@ static unsigned long g_vfork_buf[16];
 static int g_in_vfork = 0;
 static long g_vfork_child_pid = 0;
 static int g_child_exit_code = 0;
-static SHIM_FD g_saved_fds[3];
-static unsigned char g_saved_fd_open[MAX_FD];
+/* Exited vfork children not yet reaped by wait4: a pipeline starts several
+ * children before the shell waits for any of them. */
+#define MAX_EXITED_CHILDREN 32
+static struct { long pid; int code; } g_exited_children[MAX_EXITED_CHILDREN];
+static unsigned int g_exited_child_count = 0;
+
+/* vfork children share the parent's memory. An applet must start as after a
+ * real exec: with clean stdio streams rather than an EOF flag or buffered input
+ * left by an earlier child, and with zeroed BusyBox globals (grep, for example,
+ * keeps its pattern list in bb_common_bufsiz1 without clearing it). */
+typedef struct _IO_FILE SHIM_STDIO_FILE;
+extern SHIM_STDIO_FILE *const stdin, *const stdout, *const stderr;
+extern int fflush(SHIM_STDIO_FILE *);
+extern void clearerr(SHIM_STDIO_FILE *);
+#define SHIM_BB_COMMON_BUFSIZE 1024 /* BusyBox COMMON_BUFSIZE without FEATURE_USE_BSS_TAIL */
+extern char bb_common_bufsiz1[] __attribute__((weak));
+extern unsigned char xfunc_error_retval __attribute__((weak));
+static char g_saved_common_bufsiz[SHIM_BB_COMMON_BUFSIZE];
+static unsigned char g_saved_xfunc_error_retval;
+
+static void shim_prepare_applet(void) {
+    fflush(stdin);  /* musl discards unread input from a read-mode stream */
+    clearerr(stdin);
+    clearerr(stdout);
+    clearerr(stderr);
+    if (bb_common_bufsiz1)
+        for (int i = 0; i < SHIM_BB_COMMON_BUFSIZE; i++) bb_common_bufsiz1[i] = 0;
+    if (&xfunc_error_retval) xfunc_error_retval = 1; /* EXIT_FAILURE */
+}
+static SHIM_FD g_saved_fds[MAX_FD];
 static void *g_saved_ptr_to_globals = NULL;
 static const char *g_saved_applet_name = NULL;
 static void *g_saved_die_func = NULL;
@@ -1797,13 +1859,14 @@ static unsigned long s_restore_idx = 0;
 static long sys_vfork(void) {
     shim_debug_print("[vfork] enter\n");
     g_in_vfork = 1;
+    g_vfork_child_pid = ++s_next_child_pid;
 
-    /* Save parent standard FDs */
-    g_saved_fds[0] = g_fds[0];
-    g_saved_fds[1] = g_fds[1];
-    g_saved_fds[2] = g_fds[2];
+    /* Save the parent's descriptor table. Like fork, the child gets its own
+     * handle or pipe-end reference for every open descriptor, so its dup2 and
+     * close calls cannot close the parent's descriptors or pipe ends. */
     for (int i = 0; i < MAX_FD; i++) {
-        g_saved_fd_open[i] = g_fds[i].is_open;
+        g_saved_fds[i] = g_fds[i];
+        if (g_fds[i].is_open) ShimDupHandleSlot(i);
     }
 
     /* Save parent global state */
@@ -1811,6 +1874,9 @@ static long sys_vfork(void) {
     if (bb_get_applet_name) g_saved_applet_name = bb_get_applet_name();
     if (bb_get_die_func) g_saved_die_func = bb_get_die_func();
     g_saved_optind = optind;
+    if (bb_common_bufsiz1)
+        for (int i = 0; i < SHIM_BB_COMMON_BUFSIZE; i++) g_saved_common_bufsiz[i] = bb_common_bufsiz1[i];
+    if (&xfunc_error_retval) g_saved_xfunc_error_retval = xfunc_error_retval;
 
     /* Save parent stack frame */
     void *stack_base = NULL;
@@ -1850,20 +1916,10 @@ static long sys_vfork(void) {
         }
     }
 
-    /* Parent restores standard FDs and closes any extra fds opened by child */
-    for (int i = 0; i < 3; i++) {
-        if (g_fds[i].is_open && !g_fds[i].is_console && !g_fds[i].is_pipe &&
-            g_fds[i].h && g_fds[i].h != g_saved_fds[i].h) {
-            Nt_Close(g_fds[i].h);
-        }
-    }
-    g_fds[0] = g_saved_fds[0];
-    g_fds[1] = g_saved_fds[1];
-    g_fds[2] = g_saved_fds[2];
-    for (int i = 3; i < MAX_FD; i++) {
-        if (g_fds[i].is_open && !g_saved_fd_open[i]) {
-            sys_close(i);
-        }
+    /* Release everything the child still holds, then restore the parent's table. */
+    for (int i = 0; i < MAX_FD; i++) {
+        if (g_fds[i].is_open) sys_close(i);
+        g_fds[i] = g_saved_fds[i];
     }
 
     /* Parent restores global state */
@@ -1877,13 +1933,23 @@ static long sys_vfork(void) {
         bb_set_die_func(g_saved_die_func);
     }
     optind = g_saved_optind;
+    if (bb_common_bufsiz1)
+        for (int i = 0; i < SHIM_BB_COMMON_BUFSIZE; i++) bb_common_bufsiz1[i] = g_saved_common_bufsiz[i];
+    if (&xfunc_error_retval) xfunc_error_retval = g_saved_xfunc_error_retval;
     g_in_vfork = 0;
+    clearerr(stdin);
+    clearerr(stdout);
+    clearerr(stderr);
 
-    if (!g_vfork_child_pid) {
-        g_vfork_child_pid = ++s_next_child_pid;
+    long child_pid = g_vfork_child_pid;
+    g_vfork_child_pid = 0;
+    if (g_exited_child_count < MAX_EXITED_CHILDREN) {
+        g_exited_children[g_exited_child_count].pid = child_pid;
+        g_exited_children[g_exited_child_count].code = g_child_exit_code;
+        g_exited_child_count++;
     }
-    shim_debug_hex("[vfork] parent returning child_pid=", (unsigned long)g_vfork_child_pid);
-    return g_vfork_child_pid;
+    shim_debug_hex("[vfork] parent returning child_pid=", (unsigned long)child_pid);
+    return child_pid;
 }
 
 static void shim_exit_child(int code) {
@@ -1980,6 +2046,7 @@ static long sys_execve(const char *filename, char **argv, char **envp) {
             app_idx = find_applet_by_name(sub);
             if (app_idx >= 0) {
                 optind = 1;
+                shim_prepare_applet();
                 shim_debug_print("[execve] running busybox subapplet: ");
                 shim_debug_print(sub);
                 shim_debug_print("\n");
@@ -1994,6 +2061,7 @@ static long sys_execve(const char *filename, char **argv, char **envp) {
         shim_debug_hex("[execve] found app_idx=", (unsigned long)app_idx);
         if (app_idx >= 0) {
             optind = 1;
+            shim_prepare_applet();
             shim_debug_print("[execve] running applet: ");
             shim_debug_print(cmd_base);
             shim_debug_print("\n");
@@ -2015,20 +2083,14 @@ static long sys_execve(const char *filename, char **argv, char **envp) {
 }
 
 static long sys_wait4(long pid, int *wstatus, int options, void *rusage) {
-    if (g_vfork_child_pid != 0) {
-        if (pid <= 0 || pid == g_vfork_child_pid) {
-            if (wstatus) {
-                *wstatus = (g_child_exit_code & 0xFF) << 8;
-            }
-            long ret = g_vfork_child_pid;
-            g_vfork_child_pid = 0;
-            return ret;
-        }
-        return -LINUX_ECHILD;
+    for (unsigned int i = 0; i < g_exited_child_count; i++) {
+        if (pid > 0 && g_exited_children[i].pid != pid) continue;
+        long ret = g_exited_children[i].pid;
+        if (wstatus) *wstatus = (g_exited_children[i].code & 0xFF) << 8;
+        g_exited_children[i] = g_exited_children[--g_exited_child_count];
+        return ret;
     }
-    if (options & 1) { /* WNOHANG */
-        return 0;
-    }
+    /* vfork children always finish before the parent resumes. */
     return -LINUX_ECHILD;
 }
 

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+export TERM=vt100

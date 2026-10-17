@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Window Manager
+Comment=Configure Xfwm4 Theme
+Exec=/usr/bin/xfwm4-settings
+Icon=xfwm4
+Terminal=false
+Categories=System;Utility;X-XFCE;

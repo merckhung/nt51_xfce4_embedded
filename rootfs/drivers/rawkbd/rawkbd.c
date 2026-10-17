@@ -24,7 +24,7 @@ typedef struct _KEYBOARD_INPUT_DATA {
 typedef struct _MOUSE_INPUT_DATA_PKT {
     LONG   DeltaX;      /* Signed X movement (+right, -left) */
     LONG   DeltaY;      /* Signed Y movement (+down, -up) */
-    ULONG  Buttons;     /* Bit 0: Left, Bit 1: Right, Bit 2: Middle */
+    ULONG  Buttons;     /* Bit 0: Left, Bit 1: Right, Bit 2: Middle; bits 8-15: signed wheel delta */
     ULONG  RawStatus;   /* Raw PS/2 byte 0 */
 } MOUSE_INPUT_DATA_PKT, *PMOUSE_INPUT_DATA_PKT;
 
@@ -69,6 +69,7 @@ typedef struct _SHARED_INPUT_STATE {
     ULONG                MouseTail;
     UCHAR                MouseBytes[3];
     ULONG                MouseCycle;
+    ULONG                MousePacketSize; /* 3, or 4 with an IntelliMouse wheel */
 
     /* COM1 Serial ring buffer */
     UCHAR                SerBuffer[RAWKBD_BUFFER_SIZE];
@@ -173,8 +174,20 @@ static void InitI8042AndMouse(void) {
         (void)READ_PORT_UCHAR((PUCHAR)0x60);
     }
 
-    /* 6. Initialize PS/2 Mouse: Set Defaults (0xF6) + Enable Data Reporting (0xF4) */
+    /* 6. Initialize PS/2 Mouse: Set Defaults (0xF6), unlock the IntelliMouse
+     * wheel with the 200/100/80 sample-rate sequence, then read its ID (0xF2). */
     I8042WriteMouseCmd(0xF6);
+    I8042WriteMouseCmd(0xF3); I8042WriteMouseCmd(200);
+    I8042WriteMouseCmd(0xF3); I8042WriteMouseCmd(100);
+    I8042WriteMouseCmd(0xF3); I8042WriteMouseCmd(80);
+    I8042WriteMouseCmd(0xF2);
+    g_Input.MousePacketSize = 3;
+    if (I8042WaitRead() && READ_PORT_UCHAR((PUCHAR)0x60) == 0x03) {
+        g_Input.MousePacketSize = 4;
+    }
+    SerDbgPrint("[rawkbd] PS/2 mouse packet size = 0x");
+    SerDbgHex((UCHAR)g_Input.MousePacketSize);
+    SerDbgPrint("\n");
     I8042WriteMouseCmd(0xF4);
 
     /* 7. Final flush of any pending ACK bytes */
@@ -209,18 +222,22 @@ static void DrainI8042Hardware(void) {
             } else if (g_Input.MouseCycle == 1) {
                 g_Input.MouseBytes[1] = b;
                 g_Input.MouseCycle = 2;
+            } else if (g_Input.MouseCycle == 2 && g_Input.MousePacketSize == 4) {
+                g_Input.MouseBytes[2] = b;
+                g_Input.MouseCycle = 3;
             } else {
                 LONG dx, dy;
                 ULONG buttons;
                 UCHAR b0 = g_Input.MouseBytes[0];
                 UCHAR b1 = g_Input.MouseBytes[1];
-                UCHAR b2 = b;
+                UCHAR b2 = (g_Input.MouseCycle == 3) ? g_Input.MouseBytes[2] : b;
+                UCHAR wheel = (g_Input.MouseCycle == 3) ? b : 0;
                 g_Input.MouseCycle = 0;
 
                 dx = (LONG)b1 - ((b0 & 0x10) ? 256 : 0);
                 dy = (LONG)b2 - ((b0 & 0x20) ? 256 : 0);
                 dy = -dy; /* Invert Y so +dy is downward on screen */
-                buttons = (ULONG)(b0 & 0x07);
+                buttons = (ULONG)(b0 & 0x07) | ((ULONG)wheel << 8);
 
                 /* Coalesce with latest unread packet if button state matches */
                 next = (g_Input.MouseTail + 1) % RAWMOUSE_BUFFER_SIZE;

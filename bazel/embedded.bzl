@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Declared Bazel actions for boot support, native runtime and the two root filesystems."""
+"""Declared Bazel actions for boot support, native runtime and the three root filesystems."""
 
 def _build_impl(ctx):
     output = ctx.actions.declare_directory(ctx.label.name + ".files")
@@ -39,6 +39,6 @@ embedded_build = rule(
         "alpine": attr.label(allow_single_file = True),
         "_builder": attr.label(default = "//tools:build.py", allow_single_file = True),
         "_common": attr.label(default = "//tools:build_common.py", allow_single_file = True),
-        "_runner": attr.label(default = "//tools:run.cmd", executable = True, cfg = "exec", allow_single_file = True),
+        "_runner": attr.label(default = "//tools:build_runner", executable = True, cfg = "exec", allow_single_file = True),
     },
 )

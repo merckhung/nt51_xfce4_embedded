@@ -135,13 +135,7 @@ static BOOLEAN ProbeAndInitRtl8139(PNETDRV_EXT ext) {
     }
 
     if (ext->IoBase == 0) {
-        SerDbgPrint("[netdrv] WARNING: RTL8139 PCI NIC not found on Bus 0, using fallback MAC.\n");
-        ext->MacAddress[0] = 0x52;
-        ext->MacAddress[1] = 0x54;
-        ext->MacAddress[2] = 0x00;
-        ext->MacAddress[3] = 0x12;
-        ext->MacAddress[4] = 0x34;
-        ext->MacAddress[5] = 0x56;
+        SerDbgPrint("[netdrv] ERROR: RTL8139 PCI NIC not found on Bus 0.\n");
         ext->HardwarePresent = FALSE;
         return FALSE;
     }
@@ -176,6 +170,10 @@ static BOOLEAN ProbeAndInitRtl8139(PNETDRV_EXT ext) {
     WRITE_PORT_UCHAR((PUCHAR)(ULONG)(ext->IoBase + RTL_REG_CMD), RTL_CMD_RST);
     timeout = 100000;
     while ((READ_PORT_UCHAR((PUCHAR)(ULONG)(ext->IoBase + RTL_REG_CMD)) & RTL_CMD_RST) && --timeout > 0);
+    if (timeout <= 0) {
+        SerDbgPrint("[netdrv] ERROR: RTL8139 reset timed out.\n");
+        return FALSE;
+    }
 
     /* 3. Read 6-byte hardware MAC address from IDR0..5 */
     for (i = 0; i < 6; i++) {
@@ -250,6 +248,8 @@ static NTSTATUS Rtl8139TransmitFrame(PNETDRV_EXT ext, PUCHAR frameData, ULONG fr
         ULONG tsd = READ_PORT_ULONG((PULONG)(ULONG)tsdPort);
         if (tsd & 0xA000UL) break;
     }
+
+    if (timeout <= 0) return STATUS_IO_TIMEOUT;
 
     /* Acknowledge TOK/TER in ISR */
     WRITE_PORT_USHORT((PUSHORT)(ULONG)(ext->IoBase + RTL_REG_ISR), 0x000C);
@@ -378,7 +378,8 @@ static NTSTATUS NetDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
             RtlCopyMemory(ni->MacAddress, ext->MacAddress, 6);
             ni->IoBase       = ext->IoBase;
             ni->IrqLine      = ext->IrqLine;
-            ni->LinkUp       = ext->HardwarePresent ? 1 : 0;
+            ni->LinkUp       = ext->HardwarePresent &&
+                !(READ_PORT_UCHAR((PUCHAR)(ULONG)(ext->IoBase + RTL_REG_MSR)) & 0x04) ? 1 : 0;
             ni->PciVendorId  = ext->PciVendorId;
             ni->PciDeviceId  = ext->PciDeviceId;
             ni->Ipv4Addr     = 0x0A00020FUL; /* 10.0.2.15 */
@@ -479,7 +480,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     RtlZeroMemory(ext, sizeof(NETDRV_EXT));
     ext->DeviceObject = devObj;
 
-    ProbeAndInitRtl8139(ext);
+    if (!ProbeAndInitRtl8139(ext)) {
+        if (ext->DmaVirtBase) MmFreeContiguousMemory(ext->DmaVirtBase);
+        IoDeleteDevice(devObj);
+        return STATUS_DEVICE_NOT_READY;
+    }
 
     IoCreateSymbolicLink(&sym0, &devName);
     IoCreateSymbolicLink(&sym1, &devName);

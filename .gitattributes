@@ -8,3 +8,11 @@
 *.sh text eol=lf
 rc.sysinit text eol=lf
 *.png binary
+
+# Keep upstream notice collections verbatim, including their whitespace.
+/LICENSES/LicenseRef-Chromium-Bundle.txt -whitespace
+/chromium_rootfs/pkg/usr/share/licenses/chromium/NOTICE -whitespace
+
+# Chromium executables exceed GitHub's 100 MB file limit; store them with Git LFS.
+/chromium_rootfs/pkg/opt/chromium/chrome filter=lfs diff=lfs merge=lfs -text
+/chromium_rootfs/pkg/opt/chromium/headless_shell filter=lfs diff=lfs merge=lfs -text

@@ -106,21 +106,39 @@ void run_cm_tests(void) {
     TEST_CASE_START("Registry Key Value Enumeration");
     {
         HANDLE hKey = NULL;
-        USHORT wname[64];
-        UNICODE_STRING uName;
+        USHORT wname[96], wvalue[32];
+        UNICODE_STRING uName, uValue;
         OBJECT_ATTRIBUTES oa;
-        AsciiToUnicode("\\Registry\\Machine\\SYSTEM\\Setup", wname, &uName, 64);
+        AsciiToUnicode("\\Registry\\Machine\\SYSTEM\\TestEnum_Cm", wname, &uName, 96);
         InitializeObjectAttributes(&oa, &uName, OBJ_CASE_INSENSITIVE, NULL, NULL);
 
-        NTSTATUS st = Nt_OpenKey(&hKey, KEY_READ, &oa);
+        ULONG disposition = 0;
+        NTSTATUS st = Nt_CreateKey(&hKey, KEY_ALL_ACCESS, &oa, 0, NULL,
+                                  1 /* REG_OPTION_VOLATILE */, &disposition);
+        TEST_ASSERT_SUCCESS(st);
+        TEST_ASSERT_NOT_NULL(hKey);
         if (NT_SUCCESS(st)) {
-            UCHAR buf[256];
+            uint32_t value = 0x13579BDF;
+            AsciiToUnicode("EnumeratedValue", wvalue, &uValue, 32);
+            st = Nt_SetValueKey(hKey, &uValue, 0, REG_DWORD, &value, sizeof(value));
+            TEST_ASSERT_SUCCESS(st);
+            UCHAR buf[256] = {0};
             ULONG retLen = 0;
             st = Nt_EnumerateValueKey(hKey, 0, 2 /* KeyValuePartialInformation */, buf, sizeof(buf), &retLen);
-            TEST_ASSERT(NT_SUCCESS(st) || st == STATUS_NO_MORE_ENTRIES, "Enumerating first value succeeds or empty");
+            TEST_ASSERT_SUCCESS(st);
+            if (NT_SUCCESS(st)) {
+                KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)buf;
+                TEST_ASSERT_EQUAL(info->Type, REG_DWORD);
+                TEST_ASSERT_EQUAL(info->DataLength, sizeof(value));
+                TEST_ASSERT_EQUAL(*(uint32_t *)info->Data, value);
+            }
+            st = Nt_EnumerateValueKey(hKey, 1, 2, buf, sizeof(buf), &retLen);
+            TEST_ASSERT_STATUS(st, STATUS_NO_MORE_ENTRIES);
+            st = Nt_DeleteValueKey(hKey, &uValue);
+            TEST_ASSERT_SUCCESS(st);
+            st = Nt_DeleteKey(hKey);
+            TEST_ASSERT_SUCCESS(st);
             Nt_Close(hKey);
-        } else {
-            TEST_ASSERT(1, "Optional setup key skipped");
         }
     }
     TEST_CASE_FINISH();

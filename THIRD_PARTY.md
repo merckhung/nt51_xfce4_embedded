@@ -11,4 +11,22 @@ The BusyBox patch routes `ps` to the project's NT process-query backend because 
 
 XFCE, Xvfb, D-Bus, GTK and their dependencies are pinned Alpine v3.18 x86 binary packages, not rebuilt from source by this project. The manifest records every URL and SHA-256. Their upstream component licenses apply. A two-byte, explicitly checked xfconfd keepalive patch is applied during image creation; the port does not implement the Linux signal behavior it normally uses.
 
-The native runtime, Linux syscall shim, custom drivers and FAT16 image writer implement the embedded port. Unsupported GCC, GDB and SSH dispatch hooks return errors. Those earlier demonstration implementations are excluded.
+The native runtime, Linux syscall shim, custom drivers and FAT16 image writer implement the embedded port. In `chromium_rootfs/`, pre-built 32-bit x86 Chromium 158.0.8107.0 binaries (`chrome` and `headless_shell`), ANGLE (`libEGL.so`, `libGLESv2.so`), and SwiftShader (`libvk_swiftshader.so`) are included under `chromium_rootfs/pkg/opt/chromium/` subject to their upstream Chromium/BSD-3-Clause/Apache-2.0 licenses, with source patches and rebuild instructions in `chromium_rootfs/patches/`. Source revisions, build configuration and artifact hashes are recorded in [the build provenance](chromium_rootfs/pkg/opt/chromium-build.json). Upstream Google/Chromium copyright and product strings are retained. Unsupported GCC, GDB and SSH dispatch hooks return errors. Those earlier demonstration implementations are excluded.
+
+The complete GPL-2.0-only text is in `LICENSES/GPL-2.0-only.txt`.
+`licenses/musl-COPYRIGHT` and `LICENSES/LicenseRef-musl-notices.txt` retain
+musl's component notices. The Chromium notice collection in
+`LICENSES/LicenseRef-Chromium-Bundle.txt` was generated with upstream's
+`tools/licenses/licenses.py license_file --format=txt` from the pinned
+source revision. It includes shipped-license metadata across the source
+checkout, a superset of the bundled target's dependencies. An identical
+copy is packaged at `/usr/share/licenses/chromium/NOTICE`.
+`LicenseRef-Chromium-Bundle` records this collection rather than applying
+the project's GPL license to the Chromium binaries or resources.
+
+REUSE metadata describes the files in this repository. It does not grant
+rights to the separately fetched NT dependency or its historical tools.
+
+Each image includes the GPL-2.0-only text and musl component notices under
+`/usr/share/licenses/`. Chromium's additional notice collection is included
+in its image under that directory as well.

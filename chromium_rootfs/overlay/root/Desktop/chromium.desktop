@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Chromium Web Browser
+Comment=32-bit Chromium with SwiftShader GPU on NT 5.1
+Exec=/usr/bin/chromium --user-data-dir=/tmp/chrome-gui https://www.yahoo.com/
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;X-XFCE;

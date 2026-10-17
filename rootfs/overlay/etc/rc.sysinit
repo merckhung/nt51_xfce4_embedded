@@ -19,11 +19,11 @@ export DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session
 
 mkdir -p /tmp/.X11-unix /tmp/.ICE-unix /var/run /root/.config /root/Desktop
 
-insmod /lib/modules/fbdrv.sys
-insmod /lib/modules/pcspeaker.sys
-insmod /lib/modules/usbdrv.sys
-insmod /lib/modules/rtl8139.sys
-ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up
+insmod /lib/modules/fbdrv.sys || exit 1
+insmod /lib/modules/pcspeaker.sys || exit 1
+insmod /lib/modules/usbdrv.sys || exit 1
+insmod /lib/modules/rtl8139.sys || exit 1
+ifconfig eth0 || exit 1
 echo "[rc.sysinit] Loaded fbdrv.sys (/dev/fb0), usbdrv.sys, rtl8139.sys (/dev/eth0)."
 
 echo "[rc.sysinit] Generating MIME and image loader caches..."

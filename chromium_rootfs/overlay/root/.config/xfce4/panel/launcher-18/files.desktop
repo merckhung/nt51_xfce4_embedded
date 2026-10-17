@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Type=Application
+Name=File Manager
+Exec=Thunar
+Icon=system-file-manager
+Terminal=false
